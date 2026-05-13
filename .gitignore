@@ -1,0 +1,68 @@
+# ─── ビルド・復元（ソースではない） ───
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+out/
+publish/
+artifacts/
+
+# NuGet（ソリューション直下に packages を置く場合）
+[Pp]ackages/
+*.nupkg
+*.snupkg
+
+# ─── テスト ───
+[Tt]est[Rr]esults/
+*.trx
+*.coverage
+*.coveragexml
+
+# ─── Visual Studio ───
+.vs/
+*.user
+*.userosscache
+*.suo
+*.sln.docstates
+*.userprefs
+*.rsuser
+*.VC.db
+*.VC.VC.opendb
+
+# ─── JetBrains Rider ───
+.idea/
+*.sln.iml
+
+# ─── ReSharper / NCrunch ───
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+_NCrunch_*
+.*crunch*.local.xml
+nCrunchTemp_*
+
+# ─── MSBuild / キャッシュ ───
+*.pidb
+*.svclog
+*.cachefile
+*.FileListAbsolute.txt
+project.lock.json
+project.fragment.lock.json
+
+# ─── シークレット・ローカル環境 ───
+.env
+.env.*
+!.env.example
+*.pfx
+*.snk
+secrets.json
+
+# ─── OS ───
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ─── 同梱ツール一式（ローカル配置。リポジトリには含めない） ───
+/tools/
