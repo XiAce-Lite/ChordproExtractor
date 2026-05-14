@@ -1,12 +1,15 @@
 <Window x:Class="ChordproExtractor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ChordproExtractor"
         Title="Chordpro Extractor（Chordino + 1クリック挿入エディタ）"
         Height="760"
         Width="1180"
         MinHeight="560"
         MinWidth="960"
-        Background="#F5F5F7">
+        Background="#F5F5F7"
+        Loaded="Window_Loaded"
+        Closing="Window_Closing">
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -115,14 +118,14 @@
         </Border>
 
         <!-- 歌詞 | コードパレット | Chordpro プレビュー -->
-        <Grid Grid.Row="2" Margin="0,0,0,10">
+        <Grid x:Name="MainEditorGrid" Grid.Row="2" Margin="0,0,0,10">
             <!-- 3 列とも * 幅にし、各スプリッターが「左右の列だけ」をリサイズ（Auto 列は星列と干渉して狭まる） -->
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2*" MinWidth="200" />
+                <ColumnDefinition x:Name="ColLyrics" Width="2*" MinWidth="200" />
                 <ColumnDefinition Width="6" />
-                <ColumnDefinition Width="1.15*" MinWidth="220" />
+                <ColumnDefinition x:Name="ColPalette" Width="1.15*" MinWidth="220" />
                 <ColumnDefinition Width="6" />
-                <ColumnDefinition Width="1.35*" MinWidth="180" />
+                <ColumnDefinition x:Name="ColPreview" Width="1.35*" MinWidth="180" />
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0"
@@ -178,10 +181,50 @@
                                FontSize="11"
                                TextWrapping="Wrap"
                                Text="挿入は歌詞のキャレット位置に行われます。プレビュー欄は手編集できます。歌詞とプレビューを揃えるときは「Chordpro プレビュー更新」を押してください。" />
-                    <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled">
-                        <StackPanel x:Name="ChordPalettePanel" Orientation="Vertical" />
-                    </ScrollViewer>
+                    <ListBox x:Name="ChordPaletteList"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.CanContentScroll="True"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Margin" Value="0,0,0,2" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="{x:Type local:ChordPaletteItemVm}">
+                                    <Button Click="ChordPaletteInsertButton_Click"
+                                            Padding="8,6"
+                                            Margin="0,0,0,4"
+                                            HorizontalContentAlignment="Stretch"
+                                            ToolTip="{Binding ToolTipText}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding Label}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding CheckGlyph}"
+                                                       MinWidth="22"
+                                                       TextAlignment="Right"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="DarkGreen"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold" />
+                                        </Grid>
+                                    </Button>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                 </DockPanel>
             </Border>
 

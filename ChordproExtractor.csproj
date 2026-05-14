@@ -8,10 +8,15 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>ChordproExtractor</RootNamespace>
     <AssemblyName>ChordproExtractor</AssemblyName>
+    <!-- ルート配置のため SDK 既定の **\*.cs がサブプロジェクトを取り込むのを防ぐ -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);ChordproExtractor.Analysis\**;ChordproExtractor.Tests\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.21.0" />
+    <ProjectReference Include="ChordproExtractor.Analysis\ChordproExtractor.Analysis.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
   </ItemGroup>
