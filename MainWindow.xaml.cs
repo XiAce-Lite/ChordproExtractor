@@ -15,6 +15,15 @@ namespace ChordproExtractor;
 
 public partial class MainWindow : Window
 {
+    /// <summary>QM Bar and Beat Tracker の「小節線」出力（公式プラグイン名は barbeattracker）。</summary>
+    private const string VampQmBarBeatTrackerBars = "vamp:qm-vamp-plugins:qm-barbeattracker:bars";
+
+    /// <summary>QM Segmenter の境界出力（sonic-annotator の出力キーは小文字の segmentation）。</summary>
+    private const string VampQmSegmenterSegmentation = "vamp:qm-vamp-plugins:qm-segmenter:segmentation";
+
+    /// <summary>QM Segmenter の境界イベント（時刻と、その境界から始まるセグメント型 ID）。</summary>
+    private readonly record struct SegmentBoundaryEvent(double TimeSec, int SegmentTypeId);
+
     private string? _selectedAudioPath;
     private bool _isProcessing;
     private CancellationTokenSource? _cts;
@@ -109,8 +118,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        var previousPath = _selectedAudioPath;
         _selectedAudioPath = path;
         AudioPathTextBox.Text = path;
+        if (!string.Equals(previousPath, path, StringComparison.OrdinalIgnoreCase))
+            BpmTextBox.Clear();
+
         UpdateDurationLabel();
         StatusLabel.Text = "準備完了。解析で BPM とコード行を生成し、歌詞を貼ってからマージしてください。";
     }
@@ -237,8 +250,6 @@ public partial class MainWindow : Window
                 }
             }
 
-            var secondsPerFourBars = 960.0 / bpmValue;
-
             demucsWorkDir = DemucsWorkCache.TryFindReusableWorkDir(_selectedAudioPath!);
             var reusedDemucsCache = demucsWorkDir != null;
             if (demucsWorkDir != null)
@@ -303,8 +314,15 @@ public partial class MainWindow : Window
                 return;
             }
 
-            StatusLabel.Text = "Chordino（伴奏トラック）を実行しています…";
-            var (exitCode, stderr, chords) = await RunSonicAnnotatorAsync(toolPath, noVocalsWav, token).ConfigureAwait(true);
+            StatusLabel.Text = "Chordino・Bar Tracker・Segmenter を並列実行しています…";
+            var chordTask = RunSonicAnnotatorAsync(toolPath, noVocalsWav, token);
+            var barTask = RunSonicVampCsvLinesAsync(toolPath, noVocalsWav, VampQmBarBeatTrackerBars, token);
+            var segTask = RunSonicVampCsvLinesAsync(toolPath, noVocalsWav, VampQmSegmenterSegmentation, token);
+            await Task.WhenAll(chordTask, barTask, segTask).ConfigureAwait(true);
+
+            var (exitCode, stderr, chords) = await chordTask.ConfigureAwait(true);
+            var (barExit, _, barLines) = await barTask.ConfigureAwait(true);
+            var (segExit, _, segLines) = await segTask.ConfigureAwait(true);
 
             if (exitCode != 0)
             {
@@ -318,16 +336,44 @@ public partial class MainWindow : Window
                 return;
             }
 
+            var warnParts = new List<string>();
+            if (barExit != 0)
+                warnParts.Add($"Bar Tracker 失敗（終了コード {barExit}）。4 小節改行は小節データなしでスキップ。");
+            if (segExit != 0)
+                warnParts.Add($"Segmenter 失敗（終了コード {segExit}）。セクション見出しはスキップ。");
+
             chords.Sort((a, b) => a.Seconds.CompareTo(b.Seconds));
 
+            List<SegmentBoundaryEvent> segmentEvents;
+            try
+            {
+                segmentEvents = ParseSegmentBoundaryEvents(segLines);
+            }
+            catch
+            {
+                segmentEvents = [];
+                warnParts.Add("Segmenter の境界解析で例外が発生したため、セクション見出しをスキップしました。");
+            }
+
+            var barStarts = ParseAndNormalizeBarStartTimes(barLines);
+
+            if (barExit == 0 && barStarts.Count == 0 && barLines.Count > 0)
+                warnParts.Add("Bar Tracker の CSV から小節時刻を解釈できませんでした。");
+            if (segExit == 0 && segmentEvents.Count == 0 && segLines.Count > 0)
+                warnParts.Add("Segmenter の CSV から境界・セグメント ID を解釈できませんでした。");
+
             StatusLabel.Text = "コード行を組み立てています…";
-            ChordLinesTextBox.Text = BuildChordproFromChordsOnly(chords, secondsPerFourBars);
+            IReadOnlyList<SegmentBoundaryEvent>? segmentForSectionHeaders =
+                segExit == 0 && segLines.Count > 0 && segmentEvents.Count > 0 ? segmentEvents : null;
+            ChordLinesTextBox.Text =
+                BuildChordGridFromChordsWithBarsAndSegments(chords, barStarts, segmentForSectionHeaders);
             _lastChordParseResult = [.. chords];
             _lastSuccessfulBpm = bpmValue;
 
-            StatusLabel.Text = reusedDemucsCache
-                ? "Demucs（キャッシュ再利用）+ Chordino が完了しました。歌詞を貼りマージしてください。"
-                : "Demucs + Chordino が完了しました。歌詞を貼りマージしてください。";
+            var okMsg = reusedDemucsCache
+                ? "Demucs（キャッシュ再利用）+ Chordino + 小節／構造解析が完了しました。歌詞を貼りマージしてください。"
+                : "Demucs + Chordino + 小節／構造解析が完了しました。歌詞を貼りマージしてください。";
+            StatusLabel.Text = warnParts.Count > 0 ? okMsg + " " + string.Join(" ", warnParts) : okMsg;
         }
         catch (OperationCanceledException)
         {
@@ -363,7 +409,7 @@ public partial class MainWindow : Window
 
         var lyricLines = SplitLines(LyricsTextBox.Text);
         var chordLines = SplitLines(ChordLinesTextBox.Text);
-        var mergedBody = MergeLyricsAndChordLinesByRow(lyricLines, chordLines);
+        var mergedBody = MergeLyricsAndChordBlocksBySectionHeaders(lyricLines, chordLines);
 
         var bpmForPreamble = TryParseUserBpm(BpmTextBox.Text, out var manualBpm)
             ? manualBpm
@@ -383,25 +429,254 @@ public partial class MainWindow : Window
         return text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
     }
 
-    /// <summary>
-    /// 行ごとに歌詞とコード行を対応させ、コード行上の各 [コード] の先頭インデックスをコード行長で正規化し、
-    /// 歌詞行の同じ比率位置へ挿入する（大まかな文字数ベースのマージ）。
-    /// </summary>
-    private static string MergeLyricsAndChordLinesByRow(string[] lyricLines, string[] chordLines)
+    private sealed class LyricChordSectionBlock
     {
-        var n = Math.Max(lyricLines.Length, chordLines.Length);
-        if (n == 0)
+        public string? Header;
+        public List<string> ContentLines { get; } = [];
+    }
+
+    /// <summary>
+    /// 見出し行でブロック分割し、同一見出し同士をペアにする。
+    /// 各段落ではコード譜の全行から和音トークンを集約し、歌詞行の文字数比でトークンを按分したうえで
+    /// <see cref="MergeLyricLineWithChordLine"/> によりインライン化する（C# ネイティブ・セクション一致型比率マージ）。
+    /// ミリ秒単位の強制アライメントは将来 ONNX 等で拡張可能（音声は vocals / 伴奏解析の時刻と突き合わせ）。
+    /// </summary>
+    private static string MergeLyricsAndChordBlocksBySectionHeaders(string[] lyricLines, string[] chordLines)
+    {
+        var lyricBlocks = SplitChordproTextIntoSectionBlocks(lyricLines);
+        var chordBlocks = SplitChordproTextIntoSectionBlocks(chordLines);
+        if (lyricBlocks.Count == 0 && chordBlocks.Count == 0)
             return string.Empty;
 
+        var chordUsed = new bool[chordBlocks.Count];
         var sb = new StringBuilder();
-        for (var i = 0; i < n; i++)
+
+        for (var li = 0; li < lyricBlocks.Count; li++)
         {
-            var lyric = i < lyricLines.Length ? lyricLines[i] : string.Empty;
-            var chords = i < chordLines.Length ? chordLines[i] : string.Empty;
-            sb.AppendLine(MergeLyricLineWithChordLine(lyric, chords));
+            var lb = lyricBlocks[li];
+            var ci = FindChordBlockIndexMatchingHeader(chordBlocks, chordUsed, lb.Header);
+            if (!string.IsNullOrEmpty(lb.Header))
+                sb.AppendLine(lb.Header);
+
+            if (ci >= 0)
+            {
+                chordUsed[ci] = true;
+                var cb = chordBlocks[ci];
+                foreach (var merged in MergeMatchedSectionParagraphsNative(lb.ContentLines, cb.ContentLines))
+                    sb.AppendLine(merged);
+            }
+            else
+            {
+                foreach (var line in lb.ContentLines)
+                    sb.AppendLine(line);
+            }
+        }
+
+        for (var i = 0; i < chordBlocks.Count; i++)
+        {
+            if (chordUsed[i])
+                continue;
+            var cb = chordBlocks[i];
+            if (!string.IsNullOrEmpty(cb.Header))
+                sb.AppendLine(cb.Header);
+            foreach (var line in cb.ContentLines)
+                sb.AppendLine(MergeLyricLineWithChordLine(string.Empty, line));
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>段落内の複数行コードグリッドを和音トークン列にし、歌詞行へ文字数比で割り付けてマージする。</summary>
+    private static List<string> MergeMatchedSectionParagraphsNative(
+        List<string> lyricLines,
+        List<string> chordGridLines)
+    {
+        if (lyricLines.Count == 0)
+            return [];
+
+        var tokens = CollectChordBracketTokensFromGridLines(chordGridLines);
+        if (tokens.Count == 0)
+            return [.. lyricLines];
+
+        var weights = lyricLines.Select(l => Math.Max(1, l.Trim().Length)).ToArray();
+        var totalW = weights.Sum();
+        var results = new List<string>(lyricLines.Count);
+        var tStart = 0;
+        double cumFrac = 0;
+        for (var li = 0; li < lyricLines.Count; li++)
+        {
+            cumFrac += weights[li] / (double)totalW;
+            var tEnd = li == lyricLines.Count - 1
+                ? tokens.Count
+                : Math.Clamp((int)Math.Round(cumFrac * tokens.Count), tStart, tokens.Count);
+            if (tEnd < tStart)
+                tEnd = tStart;
+            var slice = tEnd > tStart ? tokens.GetRange(tStart, tEnd - tStart) : [];
+            tStart = tEnd;
+            var ly = lyricLines[li];
+            var synthChordLine = BuildChordLineForRatioMerge(slice, Math.Max(1, ly.Length));
+            results.Add(MergeLyricLineWithChordLine(ly, synthChordLine));
+        }
+
+        return results;
+    }
+
+    private static List<string> CollectChordBracketTokensFromGridLines(List<string> chordGridLines)
+    {
+        var list = new List<string>();
+        foreach (var line in chordGridLines)
+        {
+            for (var i = 0; i < line.Length; i++)
+            {
+                if (line[i] != '[')
+                    continue;
+
+                var close = line.IndexOf(']', i + 1);
+                if (close < 0)
+                    break;
+
+                var tok = line.Substring(i, close - i + 1);
+                if (IsChordBracketTokenForMerge(tok))
+                    list.Add(tok);
+
+                i = close;
+            }
+        }
+
+        return list;
+    }
+
+    private static bool IsChordBracketTokenForMerge(string token)
+    {
+        if (token.Length < 3 || token[0] != '[' || token[^1] != ']')
+            return false;
+
+        var inner = token[1..^1].Trim();
+        if (inner.Length == 0)
+            return false;
+
+        return !SectionHeaderInnerLooksStructural(inner);
+    }
+
+    /// <summary>比率マージ用に、トークンを歌詞長に沿って等間隔に配置した疑似コード行を作る。</summary>
+    private static string BuildChordLineForRatioMerge(List<string> tokens, int targetLen)
+    {
+        if (tokens.Count == 0)
+            return string.Empty;
+        if (tokens.Count == 1)
+            return tokens[0].PadRight(Math.Max(tokens[0].Length, targetLen));
+
+        var spreadLen = Math.Max(Math.Max(targetLen, tokens.Count), 2);
+        var len = Math.Max(spreadLen, tokens.Sum(static t => t.Length) + tokens.Count - 1);
+        var sb = new StringBuilder(len);
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var targetPos = (int)Math.Round(i * (double)(spreadLen - 1) / (tokens.Count - 1));
+            while (sb.Length < targetPos)
+                sb.Append(' ');
+
+            sb.Append(tokens[i]);
+        }
+
+        while (sb.Length < targetLen)
+            sb.Append(' ');
+
+        return sb.ToString();
+    }
+
+    private static List<LyricChordSectionBlock> SplitChordproTextIntoSectionBlocks(string[] lines)
+    {
+        var blocks = new List<LyricChordSectionBlock>();
+        LyricChordSectionBlock? cur = null;
+
+        foreach (var raw in lines)
+        {
+            if (IsChordProSectionHeaderLine(raw))
+            {
+                if (cur != null)
+                    blocks.Add(cur);
+                cur = new LyricChordSectionBlock { Header = raw.Trim() };
+            }
+            else
+            {
+                cur ??= new LyricChordSectionBlock { Header = null };
+                cur.ContentLines.Add(raw);
+            }
+        }
+
+        if (cur != null)
+            blocks.Add(cur);
+
+        return blocks;
+    }
+
+    private static bool IsChordProSectionHeaderLine(string line)
+    {
+        var t = line.Trim();
+        if (t.Length < 3 || t[0] != '[' || t[^1] != ']')
+            return false;
+        if (t.Contains('|'))
+            return false;
+
+        var inner = t[1..^1].Trim();
+        if (inner.Length == 0)
+            return false;
+
+        if (SectionHeaderInnerLooksStructural(inner))
+            return true;
+
+        return inner.Length >= 6 && inner.Contains(' ', StringComparison.Ordinal);
+    }
+
+    private static bool SectionHeaderInnerLooksStructural(string inner)
+    {
+        return inner.StartsWith("Intro", StringComparison.OrdinalIgnoreCase)
+               || inner.StartsWith("Outro", StringComparison.OrdinalIgnoreCase)
+               || inner.StartsWith("Verse", StringComparison.OrdinalIgnoreCase)
+               || inner.StartsWith("Chorus", StringComparison.OrdinalIgnoreCase)
+               || inner.StartsWith("Bridge", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeSectionHeaderForPairing(string? header)
+    {
+        if (string.IsNullOrWhiteSpace(header))
+            return string.Empty;
+        var t = header.Trim();
+        if (t.Length < 3 || t[0] != '[' || t[^1] != ']')
+            return t;
+        var inner = t[1..^1].Trim();
+        if (inner.StartsWith("Chorus", StringComparison.OrdinalIgnoreCase))
+            return "[Chorus]";
+        return t;
+    }
+
+    private static int FindChordBlockIndexMatchingHeader(
+        List<LyricChordSectionBlock> chordBlocks,
+        bool[] chordUsed,
+        string? header)
+    {
+        var want = NormalizeSectionHeaderForPairing(header);
+        for (var j = 0; j < chordBlocks.Count; j++)
+        {
+            if (chordUsed[j])
+                continue;
+            var h = chordBlocks[j].Header;
+            if (string.IsNullOrEmpty(header))
+            {
+                if (string.IsNullOrEmpty(h))
+                    return j;
+            }
+            else if (!string.IsNullOrEmpty(h) &&
+                     string.Equals(
+                         NormalizeSectionHeaderForPairing(h),
+                         want,
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                return j;
+            }
+        }
+
+        return -1;
     }
 
     /// <summary>1 行の歌詞と 1 行のコード（[A][B]…）を比率位置で合体。</summary>
@@ -699,19 +974,6 @@ public partial class MainWindow : Window
         return s.TrimEnd('.');
     }
 
-    private static void AppendNewlinesForFourBarBoundaries(StringBuilder sb, ref double nextBoundarySec, double timeSec,
-        double secondsPerFourBars)
-    {
-        if (secondsPerFourBars <= 0 || double.IsNaN(secondsPerFourBars) || double.IsInfinity(secondsPerFourBars))
-            return;
-
-        while (timeSec >= nextBoundarySec)
-        {
-            sb.AppendLine();
-            nextBoundarySec += secondsPerFourBars;
-        }
-    }
-
     /// <summary>
     /// Chordino の先頭付近からルートを抜き出して {key:} 用の短い表記を推定する（厳密な調性推定ではない）。
     /// </summary>
@@ -767,32 +1029,528 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 歌詞なし: Chordino のイベントを時刻順にたどり、表示用コードが変わったときだけ [chord] を並べる。
-    /// 4 小節ごとに改行する。
+    /// Bar Tracker の小節開始時刻で小節を定義し、各小節を 4 拍のマスに分割して Chordino のコードを最近傍の拍に配置する。
+    /// 1 行＝4 小節（不足分は空小節でパディング）。末尾のコードなし空小節行は出力しない。
+    /// Segmenter のイベント（時刻＋セグメント ID）が渡されたときのみ、全小節で ID 変化を検出し行頭に見出しを挿入する。
     /// </summary>
-    private static string BuildChordproFromChordsOnly(IReadOnlyList<ChordPoint> sortedChords, double secondsPerFourBars)
+    private static string BuildChordGridFromChordsWithBarsAndSegments(
+        IReadOnlyList<ChordPoint> sortedChords,
+        List<double> barStartTimesSec,
+        IReadOnlyList<SegmentBoundaryEvent>? segmentEventsSec)
     {
         if (sortedChords.Count == 0)
             return string.Empty;
 
-        var sb = new StringBuilder();
-        string? lastDisp = null;
-        var nextBoundary = secondsPerFourBars;
+        var maxChordT = 0.0;
+        foreach (var p in sortedChords)
+        {
+            if (p.Seconds > maxChordT)
+                maxChordT = p.Seconds;
+        }
+
+        if (barStartTimesSec.Count == 0)
+            return BuildChordGridFromChordsWithBarsAndSegments(
+                sortedChords,
+                SynthesizeBarStartsFromChordSpan(maxChordT),
+                segmentEventsSec);
+
+        var lastBarEnd = ComputeLastBarEndSec(barStartTimesSec, maxChordT);
+        var numBars = barStartTimesSec.Count;
+
+        var grid = new List<string[]>(numBars);
+        for (var bi = 0; bi < numBars; bi++)
+            grid.Add(["-", "-", "-", "-"]);
+
         foreach (var p in sortedChords)
         {
             var disp = FormatChordForDisplay(p.RawLabel);
             if (disp == null)
                 continue;
 
-            if (!string.Equals(disp, lastDisp, StringComparison.Ordinal))
+            var bi = FindBarIndexForTime(p.Seconds, barStartTimesSec, lastBarEnd);
+            var barStart = barStartTimesSec[bi];
+            var barEnd = bi + 1 < barStartTimesSec.Count ? barStartTimesSec[bi + 1] : lastBarEnd;
+            var span = barEnd - barStart;
+            if (span <= 1e-6)
+                span = 0.25;
+
+            var beatStarts = new double[4];
+            for (var k = 0; k < 4; k++)
+                beatStarts[k] = barStart + k * (span / 4.0);
+
+            var bestK = 0;
+            var bestD = Math.Abs(p.Seconds - beatStarts[0]);
+            for (var k = 1; k < 4; k++)
             {
-                AppendNewlinesForFourBarBoundaries(sb, ref nextBoundary, p.Seconds, secondsPerFourBars);
-                sb.Append('[').Append(disp).Append(']');
-                lastDisp = disp;
+                var d = Math.Abs(p.Seconds - beatStarts[k]);
+                if (d < bestD || (Math.Abs(d - bestD) < 1e-9 && k < bestK))
+                {
+                    bestD = d;
+                    bestK = k;
+                }
+            }
+
+            grid[bi][bestK] = '[' + disp + ']';
+        }
+
+        while (grid.Count % 4 != 0)
+            grid.Add(["-", "-", "-", "-"]);
+
+        TrimTrailingChordEmptyFourBarLines(grid);
+
+        if (grid.Count == 0)
+            return string.Empty;
+
+        Dictionary<int, string> middleHeadersByLineStart = [];
+        if (segmentEventsSec is { Count: > 0 })
+        {
+            try
+            {
+                middleHeadersByLineStart = BuildMiddleSectionHeadersBySegmentIds(
+                    grid,
+                    barStartTimesSec,
+                    segmentEventsSec);
+            }
+            catch
+            {
+                middleHeadersByLineStart = [];
             }
         }
 
+        var lastLineStart = grid.Count - 4;
+        var sb = new StringBuilder();
+        for (var lineStart = 0; lineStart < grid.Count; lineStart += 4)
+        {
+            if (segmentEventsSec is { Count: > 0 })
+            {
+                if (lineStart == 0)
+                    sb.AppendLine("[Intro]");
+                if (lineStart == lastLineStart)
+                    sb.AppendLine("[Outro]");
+                if (lineStart != 0 && lineStart != lastLineStart &&
+                    middleHeadersByLineStart.TryGetValue(lineStart, out var sectionLine))
+                    sb.AppendLine(sectionLine);
+            }
+
+            AppendFourBarChordLine(sb, grid, lineStart);
+            sb.AppendLine();
+        }
+
         return sb.ToString();
+    }
+
+    /// <summary>Bar Tracker が空のとき、2 秒小節の等間隔グリッドで代替する。</summary>
+    private static List<double> SynthesizeBarStartsFromChordSpan(double maxChordT)
+    {
+        const double widthSec = 2.0;
+        var times = new List<double> { 0 };
+        while (times[^1] < maxChordT + widthSec)
+            times.Add(times[^1] + widthSec);
+
+        return times;
+    }
+
+    /// <summary>1 行＝4 小節。行は必ず「|」で始まり「|」で終わる。各小節は拍をスペース結合し、小節間は単一の「|」のみ（|| にならない）。</summary>
+    private static void AppendFourBarChordLine(StringBuilder sb, List<string[]> grid, int lineStart)
+    {
+        var bars = new string[4];
+        var beats = new string[4];
+        for (var j = 0; j < 4; j++)
+        {
+            var cells = grid[lineStart + j];
+            for (var i = 0; i < 4; i++)
+                beats[i] = cells[i] == "-" ? "." : cells[i];
+
+            bars[j] = string.Join(" ", beats);
+        }
+
+        sb.Append('|').Append(' ').Append(bars[0]);
+        for (var j = 1; j < 4; j++)
+            sb.Append(' ').Append('|').Append(' ').Append(bars[j]);
+
+        sb.Append(' ').Append('|');
+    }
+
+    /// <summary>Chordino が未配置の「-」だけの小節行を末尾から 4 小節単位で取り除く。</summary>
+    private static void TrimTrailingChordEmptyFourBarLines(List<string[]> grid)
+    {
+        while (grid.Count >= 4 && IsFourBarBlockChordEmpty(grid, grid.Count - 4))
+            grid.RemoveRange(grid.Count - 4, 4);
+    }
+
+    private static bool IsFourBarBlockChordEmpty(List<string[]> grid, int lineStart)
+    {
+        for (var j = 0; j < 4; j++)
+        {
+            if (!IsBarChordEmpty(grid[lineStart + j]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsBarChordEmpty(string[] cells)
+    {
+        foreach (var c in cells)
+        {
+            if (c != "-")
+                return false;
+        }
+
+        return true;
+    }
+
+    private static int RoundBarIndexToNearestFourBarLineStart(int barIdx, int gridBarCount)
+    {
+        if (gridBarCount <= 0)
+            return 0;
+
+        var r = (int)(Math.Round(barIdx / 4.0) * 4);
+        var lastLineStart = (gridBarCount - 1) / 4 * 4;
+        if (r < 0)
+            r = 0;
+        if (r > lastLineStart)
+            r = lastLineStart;
+
+        return r;
+    }
+
+    /// <summary>
+    /// 先頭・最終 4 小節行以外で、小節ごとのセグメント ID 変化（最寄り 4 小節行頭へ丸め）に応じた Verse / Chorus / Bridge 見出しを構築する。
+    /// </summary>
+    private static Dictionary<int, string> BuildMiddleSectionHeadersBySegmentIds(
+        List<string[]> grid,
+        List<double> barStartTimesSec,
+        IReadOnlyList<SegmentBoundaryEvent> events)
+    {
+        var lastLineStart = grid.Count - 4;
+        var barType = new int[grid.Count];
+        for (var bi = 0; bi < grid.Count; bi++)
+            barType[bi] = GetSegmentTypeIdAtBarStart(barStartTimesSec[bi], events);
+
+        var lineToFirstBoundaryBar = new Dictionary<int, int>();
+        for (var bi = 1; bi < grid.Count; bi++)
+        {
+            if (barType[bi] == barType[bi - 1])
+                continue;
+
+            var lineStartAlign = RoundBarIndexToNearestFourBarLineStart(bi, grid.Count);
+            if (lineStartAlign == 0 || lineStartAlign == lastLineStart)
+                continue;
+
+            if (!lineToFirstBoundaryBar.ContainsKey(lineStartAlign))
+                lineToFirstBoundaryBar[lineStartAlign] = bi;
+        }
+
+        var idToHeader = new Dictionary<int, string>();
+        var verseSerial = 0;
+        var bridgeSerial = 0;
+        var result = new Dictionary<int, string>();
+        foreach (var ls in lineToFirstBoundaryBar.Keys.OrderBy(k => k))
+        {
+            var bi = lineToFirstBoundaryBar[ls];
+            var sid = barType[bi];
+            if (!idToHeader.TryGetValue(sid, out var label))
+            {
+                var ix = idToHeader.Count;
+                label = (ix % 5) switch
+                {
+                    0 or 2 or 4 => NextVerseSectionHeader(ref verseSerial),
+                    1 => "[Chorus]",
+                    3 => NextBridgeSectionHeader(ref bridgeSerial),
+                    _ => "[Section]"
+                };
+                idToHeader[sid] = label;
+            }
+
+            result[ls] = label;
+        }
+
+        return result;
+    }
+
+    private static string NextVerseSectionHeader(ref int verseSerial)
+    {
+        verseSerial++;
+        return $"[Verse {verseSerial}]";
+    }
+
+    private static string NextBridgeSectionHeader(ref int bridgeSerial)
+    {
+        bridgeSerial++;
+        return bridgeSerial == 1 ? "[Bridge]" : $"[Bridge {bridgeSerial}]";
+    }
+
+    private static int GetSegmentTypeIdAtBarStart(double barStartSec, IReadOnlyList<SegmentBoundaryEvent> sorted)
+    {
+        if (sorted.Count == 0)
+            return 0;
+
+        var bestIdx = -1;
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            if (sorted[i].TimeSec <= barStartSec + 1e-4)
+                bestIdx = i;
+            else
+                break;
+        }
+
+        if (bestIdx < 0)
+            return sorted[0].SegmentTypeId;
+
+        return sorted[bestIdx].SegmentTypeId;
+    }
+
+    private static double ComputeLastBarEndSec(List<double> barTimes, double maxChordT)
+    {
+        if (barTimes.Count == 0)
+            return maxChordT + 1.0;
+
+        double span;
+        if (barTimes.Count >= 2)
+            span = barTimes[^1] - barTimes[^2];
+        else
+            span = 2.0;
+
+        if (span < 0.1)
+            span = 0.5;
+
+        return Math.Max(barTimes[^1] + span, maxChordT + 0.25);
+    }
+
+    private static int FindBarIndexForTime(double tSec, List<double> barTimes, double lastBarEnd)
+    {
+        if (barTimes.Count == 0)
+            return 0;
+
+        var bi = LastIndexWhereLessOrEqual(barTimes, tSec);
+        if (bi < 0)
+            bi = 0;
+
+        if (tSec > lastBarEnd + 1e-6)
+            bi = barTimes.Count - 1;
+
+        if (bi >= barTimes.Count)
+            bi = barTimes.Count - 1;
+
+        return bi;
+    }
+
+    private static int LastIndexWhereLessOrEqual(List<double> sortedAsc, double value)
+    {
+        var lo = 0;
+        var hi = sortedAsc.Count - 1;
+        var ans = -1;
+        while (lo <= hi)
+        {
+            var mid = (lo + hi) / 2;
+            if (sortedAsc[mid] <= value)
+            {
+                ans = mid;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+
+        return ans;
+    }
+
+    private static List<double> ParseAndNormalizeBarStartTimes(IReadOnlyList<string> csvLines)
+    {
+        var raw = new List<double>();
+        foreach (var line in csvLines)
+        {
+            if (TryParseCsvLeadingTimeSeconds(line, out var sec) && sec >= 0 && !double.IsNaN(sec) && !double.IsInfinity(sec))
+                raw.Add(sec);
+        }
+
+        raw.Sort();
+        const double eps = 1e-3;
+        var uniq = new List<double>();
+        foreach (var t in raw)
+        {
+            if (uniq.Count == 0 || Math.Abs(uniq[^1] - t) > eps)
+                uniq.Add(t);
+        }
+
+        return uniq;
+    }
+
+    private static List<SegmentBoundaryEvent> ParseSegmentBoundaryEvents(IReadOnlyList<string> csvLines)
+    {
+        var raw = new List<SegmentBoundaryEvent>();
+        foreach (var line in csvLines)
+        {
+            if (TryParseCsvSegmentEvent(line, out var t, out var id))
+                raw.Add(new SegmentBoundaryEvent(t, id));
+        }
+
+        if (raw.Count == 0)
+            return raw;
+
+        raw.Sort((a, b) =>
+        {
+            var c = a.TimeSec.CompareTo(b.TimeSec);
+            return c != 0 ? c : a.SegmentTypeId.CompareTo(b.SegmentTypeId);
+        });
+
+        const double eps = 1e-4;
+        var merged = new List<SegmentBoundaryEvent> { raw[0] };
+        for (var i = 1; i < raw.Count; i++)
+        {
+            if (Math.Abs(raw[i].TimeSec - merged[^1].TimeSec) <= eps)
+                merged[^1] = raw[i];
+            else
+                merged.Add(raw[i]);
+        }
+
+        return merged;
+    }
+
+    private static bool TryParseCsvSegmentEvent(string line, out double timeSec, out int segmentTypeId)
+    {
+        segmentTypeId = 0;
+        if (!TryParseCsvLeadingTimeSeconds(line, out timeSec))
+            return false;
+
+        var trimmed = line.Trim();
+        if (trimmed.StartsWith('#'))
+            return false;
+
+        var parts = trimmed.Split(',');
+        if (parts.Length <= 1)
+            return true;
+
+        for (var c = parts.Length - 1; c >= 1; c--)
+        {
+            var p = parts[c].Trim().Trim('"');
+            if (int.TryParse(p, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+            {
+                segmentTypeId = id;
+                return true;
+            }
+
+            if (double.TryParse(p, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) &&
+                !double.IsNaN(d) && !double.IsInfinity(d))
+            {
+                segmentTypeId = (int)Math.Round(d);
+                return true;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryParseCsvLeadingTimeSeconds(string line, out double sec)
+    {
+        sec = 0;
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        var trimmed = line.Trim();
+        if (trimmed.StartsWith('#'))
+            return false;
+
+        var quoted = MyRegex3().Match(trimmed);
+        if (quoted.Success)
+            return double.TryParse(
+                quoted.Groups[1].Value.Trim(),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out sec);
+
+        var comma = trimmed.IndexOf(',', StringComparison.Ordinal);
+        if (comma > 0 &&
+            double.TryParse(
+                trimmed[..comma].Trim().Trim('"'),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out sec))
+            return true;
+
+        return double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out sec);
+    }
+
+    /// <summary>
+    /// 任意の VAMP 出力を CSV で標準出力に取り込む（Bar / Segmenter 等）。<c>-d</c> に続けてプラグイン出力記述子・音声パスを渡す。
+    /// </summary>
+    private static async Task<(int ExitCode, string? Stderr, List<string> Lines)> RunSonicVampCsvLinesAsync(
+        string exePath,
+        string audioPath,
+        string vampOutputDescriptor,
+        CancellationToken cancellationToken)
+    {
+        var lines = new List<string>();
+
+        var toolDir = Path.GetDirectoryName(exePath);
+        if (string.IsNullOrEmpty(toolDir))
+            toolDir = AppContext.BaseDirectory;
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = exePath,
+            WorkingDirectory = toolDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        psi.ArgumentList.Add("-d");
+        psi.ArgumentList.Add(vampOutputDescriptor);
+        psi.ArgumentList.Add(audioPath);
+        psi.ArgumentList.Add("-w");
+        psi.ArgumentList.Add("csv");
+        psi.ArgumentList.Add("--csv-stdout");
+
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        psi.Environment["PATH"] = string.IsNullOrEmpty(pathEnv)
+            ? toolDir
+            : toolDir + Path.PathSeparator + pathEnv;
+
+        using var process = new Process { StartInfo = psi };
+        process.Start();
+
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
+        try
+        {
+            while (true)
+            {
+                var line = await process.StandardOutput.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                if (line == null)
+                    break;
+
+                lines.Add(line);
+            }
+
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKillProcessTree(process);
+            try
+            {
+                await stderrTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                /* 無視 */
+            }
+
+            throw;
+        }
+
+        var stderr = await stderrTask.ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(stderr))
+            Debug.WriteLine(stderr);
+
+        return (process.ExitCode, string.IsNullOrWhiteSpace(stderr) ? null : stderr, lines);
     }
 
     private static async Task<(int ExitCode, string? Stderr, List<ChordPoint> Chords)> RunSonicAnnotatorAsync(

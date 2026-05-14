@@ -87,7 +87,7 @@
                              Padding="6,4"
                              VerticalContentAlignment="Center"
                              Text=""
-                             ToolTip="4/4 想定でコード行は 4 小節ごとに改行。空欄で変換すると自動検出し、ここに反映します。" />
+                             ToolTip="Chordpro ヘッダ用。コード行の改行は Bar Tracker（小節線）に同期。空欄で解析時に自動検出。" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button x:Name="ConvertButton"
@@ -114,14 +114,14 @@
             </Grid>
         </Border>
 
-        <!-- 3 カラム -->
+        <!-- 3 カラム（列幅はスプリッターで調整可能） -->
         <Grid Grid.Row="2" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="200" />
-                <ColumnDefinition Width="10" />
-                <ColumnDefinition Width="*" MinWidth="220" />
-                <ColumnDefinition Width="10" />
-                <ColumnDefinition Width="*" MinWidth="220" />
+                <ColumnDefinition Width="*" MinWidth="180" />
+                <ColumnDefinition Width="6" />
+                <ColumnDefinition Width="*" MinWidth="180" />
+                <ColumnDefinition Width="6" />
+                <ColumnDefinition Width="*" MinWidth="180" />
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0"
@@ -149,6 +149,15 @@
                 </DockPanel>
             </Border>
 
+            <GridSplitter Grid.Column="1"
+                          Width="6"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          ResizeDirection="Columns"
+                          ResizeBehavior="PreviousAndNext"
+                          ShowsPreview="False"
+                          Background="#D0D0D8" />
+
             <Border Grid.Column="2"
                     Padding="10"
                     Background="White"
@@ -157,7 +166,7 @@
                     BorderThickness="1">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
-                               Text="自動解析コード（1 行 ≒ 4 小節）"
+                               Text="自動解析コード（小節線ベースで 4 小節改行）"
                                FontWeight="SemiBold"
                                Margin="0,0,0,6" />
                     <TextBox x:Name="ChordLinesTextBox"
@@ -174,6 +183,15 @@
                              ToolTip="「解析」実行後に Chordino の結果が入ります。必要なら手で直せます。" />
                 </DockPanel>
             </Border>
+
+            <GridSplitter Grid.Column="3"
+                          Width="6"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          ResizeDirection="Columns"
+                          ResizeBehavior="PreviousAndNext"
+                          ShowsPreview="False"
+                          Background="#D0D0D8" />
 
             <Border Grid.Column="4"
                     Padding="10"
