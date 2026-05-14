@@ -7,12 +7,9 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
 using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
-using Whisper.net;
 
 namespace ChordproExtractor;
 
@@ -24,8 +21,11 @@ public partial class MainWindow : Window
 
     private readonly record struct ChordPoint(double Seconds, string RawLabel);
 
-    /// <summary>Whisper 由来の単語／文字とタイムスタンプ（秒）。</summary>
-    public readonly record struct WhisperWordToken(double StartSec, double EndSec, string Text);
+    /// <summary>直近の解析成功時のコード列（マージ時の {key:} 推定用）。</summary>
+    private List<ChordPoint>? _lastChordParseResult;
+
+    /// <summary>直近の解析で確定した BPM（マージ時プリアンブル用フォールバック）。</summary>
+    private double _lastSuccessfulBpm;
 
     public MainWindow()
     {
@@ -35,16 +35,6 @@ public partial class MainWindow : Window
     private void CancelButton_Click(object sender, RoutedEventArgs e)
     {
         _cts?.Cancel();
-    }
-
-    private string GetSelectedWhisperLanguageCode()
-    {
-        if (WhisperLanguageComboBox.SelectedItem is ComboBoxItem item &&
-            item.Tag is string tag &&
-            !string.IsNullOrWhiteSpace(tag))
-            return tag;
-
-        return "ja";
     }
 
     private static void TryDeleteFileIfExists(string? path)
@@ -122,7 +112,7 @@ public partial class MainWindow : Window
         _selectedAudioPath = path;
         AudioPathTextBox.Text = path;
         UpdateDurationLabel();
-        StatusLabel.Text = "準備完了。変換で Demucs → Chordino（伴奏）。チェックを入れると Whisper（歌声）→ マージも行います。";
+        StatusLabel.Text = "準備完了。解析で BPM とコード行を生成し、歌詞を貼ってからマージしてください。";
     }
 
     private void UpdateDurationLabel()
@@ -173,8 +163,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        var useWhisper = UseWhisperLyricsCheckBox.IsChecked == true;
-
         var bpmInput = BpmTextBox.Text.Trim();
         if (bpmInput.Length > 0 && !TryParseUserBpm(bpmInput, out _))
         {
@@ -187,31 +175,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        string? modelPath = null;
-        if (useWhisper)
-        {
-            modelPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "tools", "ggml-medium.bin"));
-            if (!File.Exists(modelPath))
-            {
-                StatusLabel.Text = $"Whisper モデルが見つかりません: {modelPath}";
-                MessageBox.Show(
-                    this,
-                    "tools/ggml-medium.bin を配置するか、左のチェックを外してコードのみの変換にしてください。",
-                    "Whisper モデル未配置",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-                return;
-            }
-        }
-
         _isProcessing = true;
         ConvertButton.IsEnabled = false;
+        MergeLyricsAndChordsButton.IsEnabled = false;
         CancelButton.IsEnabled = true;
         SaveButton.IsEnabled = false;
-        WhisperLanguageComboBox.IsEnabled = false;
         BpmTextBox.IsEnabled = false;
-        ChordproTextBox.Clear();
-        WhisperPreviewTextBox.Clear();
+        _lastChordParseResult = null;
+        _lastSuccessfulBpm = 0;
+        ChordLinesTextBox.Clear();
+        ChordproOutputTextBox.Clear();
         MainProgressBar.IsIndeterminate = true;
         MainProgressBar.Value = 0;
 
@@ -220,7 +193,6 @@ public partial class MainWindow : Window
         var token = _cts.Token;
 
         string? demucsWorkDir = null;
-        string? whisperResampledPath = null;
         try
         {
             DemucsWorkCache.EnsureWorkRootExists();
@@ -241,7 +213,7 @@ public partial class MainWindow : Window
                     StatusLabel.Text = $"BPM 自動検出が失敗しました（終了コード {bpmExit}）。";
                     var errBody = BuildProcessErrorBody(null, bpmStderr);
                     if (!string.IsNullOrEmpty(errBody))
-                        ChordproTextBox.Text = errBody;
+                        ChordLinesTextBox.Text = errBody;
 
                     return;
                 }
@@ -297,7 +269,7 @@ public partial class MainWindow : Window
                     {
                         StatusLabel.Text = "Demucs を起動できませんでした。";
                         if (!string.IsNullOrWhiteSpace(demucsStderr))
-                            ChordproTextBox.Text = demucsStderr.Trim();
+                            ChordLinesTextBox.Text = demucsStderr.Trim();
                         return;
                     }
 
@@ -307,7 +279,7 @@ public partial class MainWindow : Window
 
                     var errBody = BuildProcessErrorBody(demucsStdout, demucsStderr);
                     if (!string.IsNullOrEmpty(errBody))
-                        ChordproTextBox.Text = errBody;
+                        ChordLinesTextBox.Text = errBody;
 
                     return;
                 }
@@ -316,18 +288,18 @@ public partial class MainWindow : Window
                 {
                     StatusLabel.Text =
                         "Demucs 出力に vocals.wav / no_vocals.wav が見つかりません。出力フォルダ構成を確認してください。";
-                    ChordproTextBox.Text = "探索ルート: " + demucsWorkDir;
+                    ChordLinesTextBox.Text = "探索ルート: " + demucsWorkDir;
                     return;
                 }
 
                 DemucsWorkCache.WriteSourceMeta(demucsWorkDir, _selectedAudioPath!);
             }
 
-            if (!DemucsWorkCache.TryResolveDemucsStemPaths(demucsWorkDir, out var vocalsWav, out var noVocalsWav))
+            if (!DemucsWorkCache.TryResolveDemucsStemPaths(demucsWorkDir, out _, out var noVocalsWav))
             {
                 StatusLabel.Text =
                     "Demucs 出力に vocals.wav / no_vocals.wav が見つかりません。キャッシュが壊れている可能性があります。";
-                ChordproTextBox.Text = "探索ルート: " + demucsWorkDir;
+                ChordLinesTextBox.Text = "探索ルート: " + demucsWorkDir;
                 return;
             }
 
@@ -341,62 +313,21 @@ public partial class MainWindow : Window
                     $"Chordino が失敗しました（終了コード {exitCode}）。{hint}";
 
                 if (!string.IsNullOrWhiteSpace(stderr))
-                    ChordproTextBox.Text = "[標準エラー出力]" + Environment.NewLine + stderr.Trim();
+                    ChordLinesTextBox.Text = "[標準エラー出力]" + Environment.NewLine + stderr.Trim();
 
                 return;
             }
 
             chords.Sort((a, b) => a.Seconds.CompareTo(b.Seconds));
 
-            var preamble = ChordproPreamble.Build(_selectedAudioPath!, bpmValue, TryGuessKeyFromChords(chords));
-
-            if (!useWhisper)
-            {
-                WhisperPreviewTextBox.Clear();
-                StatusLabel.Text = "Chordpro 用にコードを並べています…";
-                ChordproTextBox.Text = preamble + BuildChordproFromChordsOnly(chords, secondsPerFourBars);
-                OutputTabControl.SelectedIndex = 0;
-                StatusLabel.Text = reusedDemucsCache
-                    ? "Demucs（キャッシュ再利用）+ Chordino の処理が完了しました。保存できます。"
-                    : "Demucs + Chordino の処理が完了しました。保存できます。";
-                return;
-            }
-
-            whisperResampledPath = Path.Combine(demucsWorkDir, "whisper_input_16k_mono.wav");
-            StatusLabel.Text = "Whisper 用に 16kHz / 16bit / モノラル WAV に変換しています…";
-            token.ThrowIfCancellationRequested();
-            await Task.Run(() => WriteWhisperInputWaveFile16kMono16(vocalsWav, whisperResampledPath!), token)
-                .ConfigureAwait(true);
-
-            var langCode = GetSelectedWhisperLanguageCode();
-            StatusLabel.Text = "Whisper.net（16kHz ボーカル WAV）で文字起こし中…";
-
-            List<WhisperWordToken> whisperWords;
-            try
-            {
-                whisperWords = await Task.Run(
-                        () => CollectWhisperWordTokensAsync(modelPath!, whisperResampledPath!, langCode, token),
-                        token)
-                    .ConfigureAwait(true);
-            }
-            catch (Exception ex)
-            {
-                StatusLabel.Text = $"Whisper エラー: {ex.Message}";
-                ChordproTextBox.Text = ex.ToString();
-                return;
-            }
-
-            WhisperPreviewTextBox.Text = FormatWhisperPreview(whisperWords);
-            OutputTabControl.SelectedIndex = 1;
-
-            StatusLabel.Text = "コードと歌詞をマージしています…";
-            var merged = MergeChordsWithWhisperTokens(chords, whisperWords, secondsPerFourBars);
-            ChordproTextBox.Text = preamble + merged;
-            OutputTabControl.SelectedIndex = 0;
+            StatusLabel.Text = "コード行を組み立てています…";
+            ChordLinesTextBox.Text = BuildChordproFromChordsOnly(chords, secondsPerFourBars);
+            _lastChordParseResult = [.. chords];
+            _lastSuccessfulBpm = bpmValue;
 
             StatusLabel.Text = reusedDemucsCache
-                ? "Demucs（キャッシュ再利用）+ Chordino + Whisper の処理が完了しました。保存できます。"
-                : "Demucs + Chordino + Whisper の処理が完了しました。保存できます。";
+                ? "Demucs（キャッシュ再利用）+ Chordino が完了しました。歌詞を貼りマージしてください。"
+                : "Demucs + Chordino が完了しました。歌詞を貼りマージしてください。";
         }
         catch (OperationCanceledException)
         {
@@ -405,23 +336,146 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             StatusLabel.Text = $"エラー: {ex.Message}";
-            ChordproTextBox.Text = ex.ToString();
+            ChordLinesTextBox.Text = ex.ToString();
         }
         finally
         {
-            TryDeleteFileIfExists(whisperResampledPath);
-
             MainProgressBar.IsIndeterminate = false;
             MainProgressBar.Value = MainProgressBar.Maximum;
             ConvertButton.IsEnabled = true;
+            MergeLyricsAndChordsButton.IsEnabled = true;
             CancelButton.IsEnabled = false;
             SaveButton.IsEnabled = true;
-            WhisperLanguageComboBox.IsEnabled = true;
             BpmTextBox.IsEnabled = true;
             _isProcessing = false;
             _cts?.Dispose();
             _cts = null;
         }
+    }
+
+    private void MergeLyricsAndChordsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_selectedAudioPath))
+        {
+            StatusLabel.Text = "マージ用の曲情報がありません。先に音声を選んで解析してください。";
+            return;
+        }
+
+        var lyricLines = SplitLines(LyricsTextBox.Text);
+        var chordLines = SplitLines(ChordLinesTextBox.Text);
+        var mergedBody = MergeLyricsAndChordLinesByRow(lyricLines, chordLines);
+
+        var bpmForPreamble = TryParseUserBpm(BpmTextBox.Text, out var manualBpm)
+            ? manualBpm
+            : (_lastSuccessfulBpm > 0 ? _lastSuccessfulBpm : double.NaN);
+
+        var keyGuess = _lastChordParseResult != null ? TryGuessKeyFromChords(_lastChordParseResult) : null;
+        var preamble = ChordproPreamble.Build(_selectedAudioPath, bpmForPreamble, keyGuess);
+        ChordproOutputTextBox.Text = preamble + mergedBody;
+        StatusLabel.Text = "マージが完了しました。右の内容を確認して保存できます。";
+    }
+
+    private static string[] SplitLines(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return [];
+
+        return text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+    }
+
+    /// <summary>
+    /// 行ごとに歌詞とコード行を対応させ、コード行上の各 [コード] の先頭インデックスをコード行長で正規化し、
+    /// 歌詞行の同じ比率位置へ挿入する（大まかな文字数ベースのマージ）。
+    /// </summary>
+    private static string MergeLyricsAndChordLinesByRow(string[] lyricLines, string[] chordLines)
+    {
+        var n = Math.Max(lyricLines.Length, chordLines.Length);
+        if (n == 0)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        for (var i = 0; i < n; i++)
+        {
+            var lyric = i < lyricLines.Length ? lyricLines[i] : string.Empty;
+            var chords = i < chordLines.Length ? chordLines[i] : string.Empty;
+            sb.AppendLine(MergeLyricLineWithChordLine(lyric, chords));
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>1 行の歌詞と 1 行のコード（[A][B]…）を比率位置で合体。</summary>
+    internal static string MergeLyricLineWithChordLine(string lyricLine, string chordLine)
+    {
+        var tokens = new List<(int startInChordLine, string token)>();
+        for (var i = 0; i < chordLine.Length; i++)
+        {
+            if (chordLine[i] != '[')
+                continue;
+
+            var close = chordLine.IndexOf(']', i + 1);
+            if (close < 0)
+                break;
+
+            var tok = chordLine.Substring(i, close - i + 1);
+            tokens.Add((i, tok));
+            i = close;
+        }
+
+        if (tokens.Count == 0)
+            return string.IsNullOrEmpty(lyricLine) ? chordLine : lyricLine;
+
+        if (string.IsNullOrEmpty(lyricLine))
+            return chordLine;
+
+        var chordLen = chordLine.Length;
+        if (chordLen <= 0)
+            return lyricLine;
+
+        var lyricLen = lyricLine.Length;
+        var inserts = new List<(int pos, int order, string token)>(tokens.Count);
+        for (var k = 0; k < tokens.Count; k++)
+        {
+            var (start, tok) = tokens[k];
+            var pos = (int)Math.Round((double)start / chordLen * lyricLen);
+            if (pos < 0)
+                pos = 0;
+            if (pos > lyricLen)
+                pos = lyricLen;
+
+            inserts.Add((pos, k, tok));
+        }
+
+        inserts.Sort((a, b) =>
+        {
+            var c = a.pos.CompareTo(b.pos);
+            return c != 0 ? c : a.order.CompareTo(b.order);
+        });
+
+        var cap = lyricLine.Length;
+        foreach (var (pos, order, token) in inserts)
+            cap += token.Length;
+
+        var outSb = new StringBuilder(cap);
+        var insertPtr = 0;
+        for (var i = 0; i < lyricLen; i++)
+        {
+            while (insertPtr < inserts.Count && inserts[insertPtr].pos == i)
+            {
+                outSb.Append(inserts[insertPtr].token);
+                insertPtr++;
+            }
+
+            outSb.Append(lyricLine[i]);
+        }
+
+        while (insertPtr < inserts.Count && inserts[insertPtr].pos == lyricLen)
+        {
+            outSb.Append(inserts[insertPtr].token);
+            insertPtr++;
+        }
+
+        return outSb.ToString();
     }
 
     /// <summary>
@@ -620,216 +674,6 @@ public partial class MainWindow : Window
         return sb.Length == 0 ? null : sb.ToString();
     }
 
-    /// <summary>whisper.cpp のトークン時刻（整数）を秒へ。</summary>
-    private static double WhisperNativeTimeToSeconds(long native) => native * 10.0 / 1000.0;
-
-    /// <summary>
-    /// Whisper 入力用: 16kHz / 16bit / モノラル PCM WAV を一時ファイルに書き出す。
-    /// まず MediaFoundationResampler を試し、失敗時は WDL リサンプラにフォールバックする。
-    /// </summary>
-    private static void WriteWhisperInputWaveFile16kMono16(string sourcePath, string destinationWavPath)
-    {
-        var dir = Path.GetDirectoryName(destinationWavPath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        var targetFormat = new WaveFormat(16000, 16, 1);
-
-        try
-        {
-            using var reader = new AudioFileReader(sourcePath);
-            using var resampler = new MediaFoundationResampler(reader, targetFormat) { ResamplerQuality = 60 };
-            WaveFileWriter.CreateWaveFile(destinationWavPath, resampler);
-            return;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"MediaFoundationResampler 失敗、WDL にフォールバック: {ex.Message}");
-        }
-
-        TryDeleteFileIfExists(destinationWavPath);
-
-        using (var reader = new AudioFileReader(sourcePath))
-        {
-            var wave = reader.ToSampleProvider();
-            if (reader.WaveFormat.Channels > 1)
-                wave = wave.ToMono();
-
-            var resampled = new WdlResamplingSampleProvider(wave, 16000);
-            WaveFileWriter.CreateWaveFile(destinationWavPath, resampled.ToWaveProvider16());
-        }
-    }
-
-    /// <summary>
-    /// Whisper.net: トークン時刻 + SplitOnWord。言語は引数で指定。16kHz モノラル WAV ファイルを入力とする。
-    /// </summary>
-    private static async Task<List<WhisperWordToken>> CollectWhisperWordTokensAsync(
-        string modelPath,
-        string whisperPcmWavPath,
-        string languageCode,
-        CancellationToken cancellationToken)
-    {
-        await using var wavStream = new FileStream(
-            whisperPcmWavPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: 4096,
-            FileOptions.Asynchronous);
-
-        using var whisperFactory = WhisperFactory.FromPath(modelPath);
-
-        using var processor = whisperFactory.CreateBuilder()
-            .WithLanguage(languageCode)
-            .WithTokenTimestamps()
-            .SplitOnWord()
-            .WithSuppressRegex(@"\[_TT_\d+\]|\[_BEG_\]|\[_END_\]|_TT_|_BEG_|_END_")
-            .Build();
-
-        var pool = new List<WhisperWordToken>(512);
-
-        await foreach (var segment in processor.ProcessAsync(wavStream, cancellationToken).ConfigureAwait(false))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (segment.Tokens is null)
-                continue;
-
-            foreach (var tok in segment.Tokens)
-            {
-                var piece = tok.Text?.Trim('\r', '\n', ' ', '\u00a0') ?? string.Empty;
-                if (!ShouldEmitWhisperTokenPiece(piece))
-                    continue;
-
-                var startSec = WhisperNativeTimeToSeconds(tok.Start);
-                var endSec = WhisperNativeTimeToSeconds(tok.End);
-                if (endSec < startSec)
-                    (startSec, endSec) = (endSec, startSec);
-
-                if (ContainsCjkKanaOrHangul(piece))
-                {
-                    foreach (var w in ExpandTextToCharTokens(startSec, endSec, piece))
-                        pool.Add(w);
-                }
-                else
-                {
-                    pool.Add(new WhisperWordToken(startSec, endSec, piece));
-                }
-            }
-        }
-
-        return pool;
-    }
-
-    private static readonly Regex WhisperBracketTimestamp = MyRegex();
-
-    /// <summary>[_BEG_] のように [ で始まり _…_ ] で閉じる短いメタ用。日本語の [ 音…] にはマッチしない。</summary>
-    private static readonly Regex WhisperBracketUnderscoreMeta = MyRegex2();
-
-    private static bool ContainsCjkKanaOrHangul(string s)
-    {
-        foreach (var c in s)
-        {
-            switch (c)
-            {
-                case >= '\u3040' and <= '\u309f': // Hiragana
-                case >= '\u30a0' and <= '\u30ff': // Katakana
-                    return true;
-                case >= '\u4e00' and <= '\u9fff': // CJK Unified Ideographs
-                    return true;
-                case >= '\uac00' and <= '\ud7a3': // Hangul syllables
-                    return true;
-                default:
-                    continue;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// トークン時刻用のメタ（[_BEG_] / [_TT_n]）や、それを文字分割した断片をプレビュー・マージから除外する。
-    /// </summary>
-    private static bool ShouldEmitWhisperTokenPiece(string piece)
-    {
-        var t = piece.Trim('\r', '\n', ' ', '\u00a0');
-        if (t.Length == 0)
-            return false;
-
-        if (WhisperBracketTimestamp.IsMatch(t))
-            return false;
-        if (WhisperBracketUnderscoreMeta.IsMatch(t))
-            return false;
-
-        if (t.Contains("_TT_", StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (t.Contains("_BEG_", StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (t.Contains("_END_", StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (t.Contains("<|", StringComparison.Ordinal))
-            return false;
-        if (t.Contains("|>", StringComparison.Ordinal))
-            return false;
-
-        // メタを 1 文字ずつ分割した断片（[, ], _, B, E, G, T, 数字）
-        if (t.Length == 1)
-        {
-            var c = t[0];
-            if (c is '[' or ']' or '_')
-                return false;
-            if (char.IsAsciiLetterOrDigit(c))
-                return false;
-        }
-
-        return true;
-    }
-
-    private static IEnumerable<WhisperWordToken> ExpandTextToCharTokens(double startSec, double endSec, string text)
-    {
-        var span = endSec - startSec;
-        if (span < 0)
-            span = 0;
-
-        if (text.Length == 0)
-            yield break;
-
-        if (text.Length == 1)
-        {
-            if (ShouldEmitWhisperTokenPiece(text))
-                yield return new WhisperWordToken(startSec, endSec, text);
-            yield break;
-        }
-
-        for (var i = 0; i < text.Length; i++)
-        {
-            var ch = text.Substring(i, 1);
-            if (!ShouldEmitWhisperTokenPiece(ch))
-                continue;
-
-            var s = startSec + span * i / text.Length;
-            var e = startSec + span * (i + 1) / text.Length;
-            yield return new WhisperWordToken(s, e, ch);
-        }
-    }
-
-    private static string FormatWhisperPreview(IReadOnlyList<WhisperWordToken> tokens)
-    {
-        var sb = new StringBuilder();
-        foreach (var t in tokens)
-        {
-            var start = TimeSpan.FromSeconds(t.StartSec);
-            var end = TimeSpan.FromSeconds(t.EndSec);
-            sb.Append(start.ToString(@"mm\:ss\.fff", CultureInfo.InvariantCulture))
-                .Append(" → ")
-                .Append(end.ToString(@"mm\:ss\.fff", CultureInfo.InvariantCulture))
-                .Append('\t')
-                .AppendLine(t.Text);
-        }
-
-        return sb.ToString();
-    }
-
     /// <summary>
     /// ユーザー入力 BPM。空欄は false。20〜400 の範囲のみ true。
     /// </summary>
@@ -923,25 +767,6 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Whisper トークン連結時、ASCII 英字同士の境にだけスペースを入れて run-on を防ぐ。
-    /// </summary>
-    private static void AppendWhisperMergedText(StringBuilder sb, string text)
-    {
-        if (text.Length == 0)
-            return;
-
-        if (sb.Length > 0)
-        {
-            var last = sb[^1];
-            var first = text[0];
-            if (char.IsAsciiLetter(last) && char.IsAsciiLetter(first))
-                sb.Append(' ');
-        }
-
-        sb.Append(text);
-    }
-
-    /// <summary>
     /// 歌詞なし: Chordino のイベントを時刻順にたどり、表示用コードが変わったときだけ [chord] を並べる。
     /// 4 小節ごとに改行する。
     /// </summary>
@@ -968,78 +793,6 @@ public partial class MainWindow : Window
         }
 
         return sb.ToString();
-    }
-
-    private static string MergeChordsWithWhisperTokens(
-        IReadOnlyList<ChordPoint> chordsSorted,
-        List<WhisperWordToken> whisperTokens,
-        double secondsPerFourBars)
-    {
-        if (whisperTokens.Count == 0)
-            return string.Empty;
-
-        var sb = new StringBuilder();
-        string? lastEmittedChordDisplay = null;
-        var nextBoundary = secondsPerFourBars;
-
-        foreach (var w in whisperTokens)
-        {
-            AppendNewlinesForFourBarBoundaries(sb, ref nextBoundary, w.StartSec, secondsPerFourBars);
-
-            var active = FindChordActiveAtTimeForMerge(chordsSorted, w.StartSec);
-            var disp = active.HasValue ? FormatChordForDisplay(active.Value.RawLabel) : null;
-
-            if (!string.Equals(disp, lastEmittedChordDisplay, StringComparison.Ordinal))
-            {
-                if (disp != null)
-                    sb.Append('[').Append(disp).Append(']');
-
-                lastEmittedChordDisplay = disp;
-            }
-
-            AppendWhisperMergedText(sb, w.Text);
-        }
-
-        return sb.ToString();
-    }
-
-    private static ChordPoint? FindLastChordAtOrBefore(IReadOnlyList<ChordPoint> sorted, double timeSec)
-    {
-        if (sorted.Count == 0)
-            return null;
-
-        var lo = 0;
-        var hi = sorted.Count - 1;
-        while (lo <= hi)
-        {
-            var mid = (lo + hi) / 2;
-            var t = sorted[mid].Seconds;
-            if (t <= timeSec)
-            {
-                if (mid == sorted.Count - 1 || sorted[mid + 1].Seconds > timeSec)
-                    return sorted[mid];
-                lo = mid + 1;
-            }
-            else
-            {
-                hi = mid - 1;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// マージ用: 指定時刻以前に確定した最後のコード。無い場合は Chordino の先頭行を曲頭のコードとして使う
-    /// （先頭無音などで最初の歌詞が最初のコードイベントより前でも、開幕コードを出す）。
-    /// </summary>
-    private static ChordPoint? FindChordActiveAtTimeForMerge(IReadOnlyList<ChordPoint> sorted, double timeSec)
-    {
-        if (sorted.Count == 0)
-            return null;
-
-        var atOrBefore = FindLastChordAtOrBefore(sorted, timeSec);
-        return atOrBefore ?? sorted[0];
     }
 
     private static async Task<(int ExitCode, string? Stderr, List<ChordPoint> Chords)> RunSonicAnnotatorAsync(
@@ -1335,7 +1088,7 @@ public partial class MainWindow : Window
         {
             File.WriteAllText(
                 dlg.FileName,
-                ChordproTextBox.Text,
+                ChordproOutputTextBox.Text,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             StatusLabel.Text = $"保存しました: {dlg.FileName}";
         }
@@ -1345,12 +1098,8 @@ public partial class MainWindow : Window
         }
     }
 
-    [GeneratedRegex(@"^\[_TT_\d+\]$", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant)]
-    private static partial Regex MyRegex();
     [GeneratedRegex(@"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant)]
     private static partial Regex MyRegex1();
-    [GeneratedRegex(@"^\[_[A-Za-z0-9]+_\]$", RegexOptions.Compiled | RegexOptions.CultureInvariant)]
-    private static partial Regex MyRegex2();
     [GeneratedRegex(@",\s*([\d.Ee+-]+)\s*,\s*""([^""]*)""\s*$", RegexOptions.CultureInvariant)]
     private static partial Regex MyRegex3();
 }

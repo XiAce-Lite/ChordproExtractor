@@ -1,16 +1,17 @@
 <Window x:Class="ChordproExtractor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Chordpro Extractor (Chordino + 任意で Whisper)"
-        Height="700"
-        Width="1000"
-        MinHeight="520"
-        MinWidth="760"
+        Title="Chordpro Extractor（Chordino + 歌詞コピペマージ）"
+        Height="760"
+        Width="1180"
+        MinHeight="560"
+        MinWidth="960"
         Background="#F5F5F7">
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" MinHeight="220" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" MinHeight="260" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
@@ -21,7 +22,7 @@
                 CornerRadius="8"
                 BorderBrush="#D0D0D8"
                 BorderThickness="1"
-                Margin="0,0,0,12">
+                Margin="0,0,0,10">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -34,24 +35,7 @@
                             MinWidth="180"
                             Click="BrowseButton_Click" />
                     <TextBlock VerticalAlignment="Center"
-                               Margin="16,0,8,0"
-                               Foreground="#555"
-                               Text="Whisper 言語" />
-                    <ComboBox x:Name="WhisperLanguageComboBox"
-                              Width="150"
-                              VerticalAlignment="Center"
-                              SelectedIndex="0"
-                              ToolTip="Whisper で歌詞推定するときの言語コード">
-                        <ComboBoxItem Content="日本語" Tag="ja" />
-                        <ComboBoxItem Content="英語" Tag="en" />
-                        <ComboBoxItem Content="フランス語" Tag="fr" />
-                        <ComboBoxItem Content="ドイツ語" Tag="de" />
-                        <ComboBoxItem Content="スペイン語" Tag="es" />
-                        <ComboBoxItem Content="中国語" Tag="zh" />
-                        <ComboBoxItem Content="韓国語" Tag="ko" />
-                    </ComboBox>
-                    <TextBlock VerticalAlignment="Center"
-                               Margin="12,0,0,0"
+                               Margin="16,0,0,0"
                                Foreground="#555"
                                Text="または下に MP3 / WAV をドロップ" />
                 </StackPanel>
@@ -81,139 +65,185 @@
             </Grid>
         </Border>
 
-        <!-- 中央 -->
-        <Grid Grid.Row="1" Margin="0,0,0,12">
+        <!-- 操作バー -->
+        <Border Grid.Row="1"
+                Padding="12,10"
+                Background="White"
+                CornerRadius="8"
+                BorderBrush="#D0D0D8"
+                BorderThickness="1"
+                Margin="0,0,0,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#333" Text="BPM" />
+                    <TextBox x:Name="BpmTextBox"
+                             Width="80"
+                             Padding="6,4"
+                             VerticalContentAlignment="Center"
+                             Text=""
+                             ToolTip="4/4 想定でコード行は 4 小節ごとに改行。空欄で変換すると自動検出し、ここに反映します。" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="ConvertButton"
+                            Content="解析（BPM + コード）"
+                            Padding="14,8"
+                            MinWidth="160"
+                            Margin="0,0,8,0"
+                            Click="ConvertButton_Click" />
+                    <Button x:Name="CancelButton"
+                            Content="キャンセル"
+                            Padding="14,8"
+                            MinWidth="100"
+                            IsEnabled="False"
+                            Click="CancelButton_Click" />
+                </StackPanel>
+                <Button x:Name="MergeLyricsAndChordsButton"
+                        Grid.Column="3"
+                        Content="歌詞とコードを行単位でマージ"
+                        Padding="16,8"
+                        MinWidth="260"
+                        HorizontalAlignment="Right"
+                        Click="MergeLyricsAndChordsButton_Click"
+                        ToolTip="左の歌詞と中央のコード行を上から対応させ、コード行上の [コード] の位置比率に合わせて歌詞へ挿入し、右に Chordpro を出力します。" />
+            </Grid>
+        </Border>
+
+        <!-- 3 カラム -->
+        <Grid Grid.Row="2" Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="280" MinWidth="220" />
-                <ColumnDefinition Width="12" />
-                <ColumnDefinition Width="*" MinWidth="320" />
+                <ColumnDefinition Width="*" MinWidth="200" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" MinWidth="220" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" MinWidth="220" />
             </Grid.ColumnDefinitions>
 
-            <!-- 左: 実行・進捗 -->
             <Border Grid.Column="0"
-                    Padding="12"
+                    Padding="10"
                     Background="White"
                     CornerRadius="8"
                     BorderBrush="#D0D0D8"
                     BorderThickness="1">
-                <StackPanel>
-                    <TextBlock Text="変換" FontWeight="SemiBold" Margin="0,0,0,8" />
-                    <CheckBox x:Name="UseWhisperLyricsCheckBox"
-                              Margin="0,0,0,10"
-                              Content="Whisper で歌詞を推定し、コードとマージする"
-                              ToolTip="オフのときは Demucs → Chordino のみ。コードを Chordpro 風に並べます（歌詞なし）。" />
-                    <StackPanel Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock VerticalAlignment="Center"
-                                       Margin="0,0,8,0"
-                                       Foreground="#333"
-                                       Text="BPM" />
-                            <TextBox x:Name="BpmTextBox"
-                                     Width="72"
-                                     Padding="6,4"
-                                     VerticalContentAlignment="Center"
-                                     Text=""
-                                     ToolTip="4/4 想定で 4 小節ごとに改行します。空欄のまま変換すると Sonic Annotator で自動検出し、ここに反映します。" />
-                        </StackPanel>
-                        <TextBlock Margin="0,4,0,0"
-                                   Foreground="#777"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Text="空欄なら自動取得。数値を入れるとその BPM を優先し、テンポ検出はスキップします。" />
-                    </StackPanel>
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="8" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Button x:Name="ConvertButton"
-                                Grid.Column="0"
-                                Content="変換"
-                                Padding="12,10"
-                                HorizontalAlignment="Stretch"
-                                Click="ConvertButton_Click" />
-                        <Button x:Name="CancelButton"
-                                Grid.Column="2"
-                                Content="キャンセル"
-                                Padding="12,10"
-                                HorizontalAlignment="Stretch"
-                                IsEnabled="False"
-                                Click="CancelButton_Click" />
-                    </Grid>
-                    <TextBlock x:Name="DurationLabel"
-                               Margin="0,12,0,4"
-                               Foreground="#555"
-                               Text="長さ: —" />
-                    <TextBlock Text="進捗" FontWeight="SemiBold" Margin="0,16,0,6" />
-                    <ProgressBar x:Name="MainProgressBar"
-                                 Height="22"
-                                 Minimum="0"
-                                 Maximum="100"
-                                 IsIndeterminate="False" />
-                    <TextBlock x:Name="StatusLabel"
-                               Margin="0,10,0,0"
-                               TextWrapping="Wrap"
-                               Foreground="#333"
-                               Text="音声を選んで変換。Whisper を使う場合は tools/ggml-medium.bin が必要です。" />
-                </StackPanel>
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="歌詞（コピペ）"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,6" />
+                    <TextBox x:Name="LyricsTextBox"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontSize="13"
+                             Padding="8"
+                             BorderBrush="#C8C8D0"
+                             BorderThickness="1"
+                             Background="#FFFFFA"
+                             ToolTip="ネットなどからコピーした歌詞を貼り付け。1 行がマージ時に左カラムの 1 行と対応します。" />
+                </DockPanel>
             </Border>
 
-            <!-- 右: タブ -->
             <Border Grid.Column="2"
-                    Padding="12"
+                    Padding="10"
                     Background="White"
                     CornerRadius="8"
                     BorderBrush="#D0D0D8"
                     BorderThickness="1">
-                <TabControl x:Name="OutputTabControl">
-                    <TabItem Header="Chordpro">
-                        <TextBox x:Name="ChordproTextBox"
-                                 AcceptsReturn="True"
-                                 TextWrapping="Wrap"
-                                 VerticalScrollBarVisibility="Auto"
-                                 HorizontalScrollBarVisibility="Auto"
-                                 FontFamily="Consolas,Cascadia Mono,monospace"
-                                 FontSize="13"
-                                 Padding="8"
-                                 Margin="0,4,0,0"
-                                 BorderBrush="#C8C8D0"
-                                 BorderThickness="1"
-                                 Background="#FFFCF8" />
-                    </TabItem>
-                    <TabItem Header="Whisper（文字・タイムスタンプ）">
-                        <TextBox x:Name="WhisperPreviewTextBox"
-                                 IsReadOnly="True"
-                                 AcceptsReturn="True"
-                                 TextWrapping="Wrap"
-                                 VerticalScrollBarVisibility="Auto"
-                                 HorizontalScrollBarVisibility="Auto"
-                                 FontFamily="Consolas,Cascadia Mono,monospace"
-                                 FontSize="12"
-                                 Padding="8"
-                                 Margin="0,4,0,0"
-                                 BorderBrush="#C8C8D0"
-                                 BorderThickness="1"
-                                 Background="#F8F8FF" />
-                    </TabItem>
-                </TabControl>
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="自動解析コード（1 行 ≒ 4 小節）"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,6" />
+                    <TextBox x:Name="ChordLinesTextBox"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas,Cascadia Mono,monospace"
+                             FontSize="13"
+                             Padding="8"
+                             BorderBrush="#C8C8D0"
+                             BorderThickness="1"
+                             Background="#F8FAFF"
+                             ToolTip="「解析」実行後に Chordino の結果が入ります。必要なら手で直せます。" />
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Column="4"
+                    Padding="10"
+                    Background="White"
+                    CornerRadius="8"
+                    BorderBrush="#D0D0D8"
+                    BorderThickness="1">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="Chordpro 出力（マージ後）"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,6" />
+                    <TextBox x:Name="ChordproOutputTextBox"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas,Cascadia Mono,monospace"
+                             FontSize="13"
+                             Padding="8"
+                             BorderBrush="#C8C8D0"
+                             BorderThickness="1"
+                             Background="#FFFCF8"
+                             ToolTip="マージボタンで生成。保存はこの内容です。" />
+                </DockPanel>
             </Border>
         </Grid>
 
-        <!-- 下部: 保存 -->
-        <Border Grid.Row="2"
+        <!-- 下部: 進捗・保存 -->
+        <Border Grid.Row="3"
                 Padding="12"
                 Background="White"
                 CornerRadius="8"
                 BorderBrush="#D0D0D8"
                 BorderThickness="1">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="SaveButton"
-                        Content=".chordpro / .pro として保存…"
-                        Padding="16,8"
-                        MinWidth="220"
-                        Click="SaveButton_Click" />
-            </StackPanel>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="False">
+                    <TextBlock x:Name="DurationLabel"
+                               DockPanel.Dock="Left"
+                               VerticalAlignment="Center"
+                               Margin="0,0,16,0"
+                               Foreground="#555"
+                               Text="長さ: —" />
+                    <TextBlock x:Name="StatusLabel"
+                               DockPanel.Dock="Left"
+                               VerticalAlignment="Center"
+                               TextWrapping="Wrap"
+                               Foreground="#333"
+                               Text="音声を選び「解析」でコード行を生成。歌詞を貼ってからマージしてください。" />
+                    <Button x:Name="SaveButton"
+                            DockPanel.Dock="Right"
+                            Content=".chordpro / .pro として保存…"
+                            Padding="16,8"
+                            MinWidth="220"
+                            Margin="16,0,0,0"
+                            Click="SaveButton_Click" />
+                </DockPanel>
+                <StackPanel Grid.Row="1" Orientation="Vertical">
+                    <TextBlock Text="進捗" FontWeight="SemiBold" Margin="0,0,0,4" />
+                    <ProgressBar x:Name="MainProgressBar"
+                                 Height="22"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 IsIndeterminate="False" />
+                </StackPanel>
+            </Grid>
         </Border>
     </Grid>
 </Window>
