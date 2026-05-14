@@ -1,16 +1,16 @@
 <Window x:Class="ChordproExtractor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Chordpro Extractor (Sonic Annotator / Chordino)"
-        Height="640"
-        Width="960"
-        MinHeight="480"
-        MinWidth="720"
+        Title="Chordpro Extractor (Chordino + 任意で Whisper)"
+        Height="700"
+        Width="1000"
+        MinHeight="520"
+        MinWidth="760"
         Background="#F5F5F7">
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" MinHeight="200" />
+            <RowDefinition Height="*" MinHeight="220" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
@@ -34,9 +34,26 @@
                             MinWidth="180"
                             Click="BrowseButton_Click" />
                     <TextBlock VerticalAlignment="Center"
+                               Margin="16,0,8,0"
+                               Foreground="#555"
+                               Text="Whisper 言語" />
+                    <ComboBox x:Name="WhisperLanguageComboBox"
+                              Width="150"
+                              VerticalAlignment="Center"
+                              SelectedIndex="0"
+                              ToolTip="Whisper で歌詞推定するときの言語コード">
+                        <ComboBoxItem Content="日本語" Tag="ja" />
+                        <ComboBoxItem Content="英語" Tag="en" />
+                        <ComboBoxItem Content="フランス語" Tag="fr" />
+                        <ComboBoxItem Content="ドイツ語" Tag="de" />
+                        <ComboBoxItem Content="スペイン語" Tag="es" />
+                        <ComboBoxItem Content="中国語" Tag="zh" />
+                        <ComboBoxItem Content="韓国語" Tag="ko" />
+                    </ComboBox>
+                    <TextBlock VerticalAlignment="Center"
                                Margin="12,0,0,0"
                                Foreground="#555"
-                               Text="または下のエリアに MP3 / WAV をドロップ" />
+                               Text="または下に MP3 / WAV をドロップ" />
                 </StackPanel>
                 <Border Grid.Row="1"
                         x:Name="DropZoneBorder"
@@ -64,7 +81,7 @@
             </Grid>
         </Border>
 
-        <!-- 中央: 2カラム -->
+        <!-- 中央 -->
         <Grid Grid.Row="1" Margin="0,0,0,12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="280" MinWidth="220" />
@@ -81,11 +98,49 @@
                     BorderThickness="1">
                 <StackPanel>
                     <TextBlock Text="変換" FontWeight="SemiBold" Margin="0,0,0,8" />
-                    <Button x:Name="ConvertButton"
-                            Content="Chordino で変換"
-                            Padding="12,10"
-                            HorizontalAlignment="Stretch"
-                            Click="ConvertButton_Click" />
+                    <CheckBox x:Name="UseWhisperLyricsCheckBox"
+                              Margin="0,0,0,10"
+                              Content="Whisper で歌詞を推定し、コードとマージする"
+                              ToolTip="オフのときは Demucs → Chordino のみ。コードを Chordpro 風に並べます（歌詞なし）。" />
+                    <StackPanel Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock VerticalAlignment="Center"
+                                       Margin="0,0,8,0"
+                                       Foreground="#333"
+                                       Text="BPM" />
+                            <TextBox x:Name="BpmTextBox"
+                                     Width="72"
+                                     Padding="6,4"
+                                     VerticalContentAlignment="Center"
+                                     Text=""
+                                     ToolTip="4/4 想定で 4 小節ごとに改行します。空欄のまま変換すると Sonic Annotator で自動検出し、ここに反映します。" />
+                        </StackPanel>
+                        <TextBlock Margin="0,4,0,0"
+                                   Foreground="#777"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Text="空欄なら自動取得。数値を入れるとその BPM を優先し、テンポ検出はスキップします。" />
+                    </StackPanel>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="ConvertButton"
+                                Grid.Column="0"
+                                Content="変換"
+                                Padding="12,10"
+                                HorizontalAlignment="Stretch"
+                                Click="ConvertButton_Click" />
+                        <Button x:Name="CancelButton"
+                                Grid.Column="2"
+                                Content="キャンセル"
+                                Padding="12,10"
+                                HorizontalAlignment="Stretch"
+                                IsEnabled="False"
+                                Click="CancelButton_Click" />
+                    </Grid>
                     <TextBlock x:Name="DurationLabel"
                                Margin="0,12,0,4"
                                Foreground="#555"
@@ -100,34 +155,48 @@
                                Margin="0,10,0,0"
                                TextWrapping="Wrap"
                                Foreground="#333"
-                               Text="音声を選んで「Chordino で変換」を押してください。" />
+                               Text="音声を選んで変換。Whisper を使う場合は tools/ggml-medium.bin が必要です。" />
                 </StackPanel>
             </Border>
 
-            <!-- 右: Chordpro スケルトン -->
+            <!-- 右: タブ -->
             <Border Grid.Column="2"
                     Padding="12"
                     Background="White"
                     CornerRadius="8"
                     BorderBrush="#D0D0D8"
                     BorderThickness="1">
-                <DockPanel>
-                    <TextBlock DockPanel.Dock="Top"
-                               Text="Chordpro スケルトン（編集可）"
-                               FontWeight="SemiBold"
-                               Margin="0,0,0,8" />
-                    <TextBox x:Name="ChordproTextBox"
-                             AcceptsReturn="True"
-                             TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto"
-                             HorizontalScrollBarVisibility="Auto"
-                             FontFamily="Consolas,Cascadia Mono,monospace"
-                             FontSize="13"
-                             Padding="8"
-                             BorderBrush="#C8C8D0"
-                             BorderThickness="1"
-                             Background="#FFFCF8" />
-                </DockPanel>
+                <TabControl x:Name="OutputTabControl">
+                    <TabItem Header="Chordpro">
+                        <TextBox x:Name="ChordproTextBox"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas,Cascadia Mono,monospace"
+                                 FontSize="13"
+                                 Padding="8"
+                                 Margin="0,4,0,0"
+                                 BorderBrush="#C8C8D0"
+                                 BorderThickness="1"
+                                 Background="#FFFCF8" />
+                    </TabItem>
+                    <TabItem Header="Whisper（文字・タイムスタンプ）">
+                        <TextBox x:Name="WhisperPreviewTextBox"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas,Cascadia Mono,monospace"
+                                 FontSize="12"
+                                 Padding="8"
+                                 Margin="0,4,0,0"
+                                 BorderBrush="#C8C8D0"
+                                 BorderThickness="1"
+                                 Background="#F8F8FF" />
+                    </TabItem>
+                </TabControl>
             </Border>
         </Grid>
 

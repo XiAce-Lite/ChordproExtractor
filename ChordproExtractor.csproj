@@ -12,10 +12,17 @@
 
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="TagLibSharp" Version="2.3.0" />
+    <PackageReference Include="Whisper.net" Version="1.9.0" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.0" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="tools\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="tools\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="demucs_wrapper.py" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

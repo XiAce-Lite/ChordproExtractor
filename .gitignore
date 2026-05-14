@@ -1,11 +1,14 @@
 # ─── ビルド・復元（ソースではない） ───
 [Bb]in/
 [Oo]bj/
+/dist/
+/build/
 [Ll]og/
 [Ll]ogs/
 out/
 publish/
 artifacts/
+__pycache__/
 
 # NuGet（ソリューション直下に packages を置く場合）
 [Pp]ackages/
