@@ -59,6 +59,7 @@ project.fragment.lock.json
 *.pfx
 *.snk
 secrets.json
+.cursor/
 
 # ─── OS ───
 Thumbs.db
