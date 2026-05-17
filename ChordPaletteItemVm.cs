@@ -7,17 +7,32 @@ namespace ChordproExtractor;
 public sealed class ChordPaletteItemVm : INotifyPropertyChanged
 {
     private bool _isUsed;
+    private bool _isActive;
 
-    public ChordPaletteItemVm(string label, string insert, string toolTipText)
+    public ChordPaletteItemVm(string label, string insert, string toolTipText, double seconds)
     {
         Label = label;
         Insert = insert;
         ToolTipText = toolTipText;
+        Seconds = seconds;
     }
 
     public string Label { get; }
     public string Insert { get; }
     public string ToolTipText { get; }
+    public double Seconds { get; }
+
+    public bool IsActive
+    {
+        get => _isActive;
+        set
+        {
+            if (_isActive == value)
+                return;
+            _isActive = value;
+            OnPropertyChanged(nameof(IsActive));
+        }
+    }
 
     public bool IsUsed
     {

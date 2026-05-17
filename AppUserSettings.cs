@@ -23,6 +23,12 @@ internal sealed class AppUserSettings
 
     public string? LastBrowseDirectory { get; set; }
 
+    /// <summary>再生音量 0〜1。未設定時は 0.8。</summary>
+    public double? PlaybackVolume { get; set; }
+
+    /// <summary>再生速度 0.5〜1.0。未設定時は 1.0。</summary>
+    public double? PlaybackRate { get; set; }
+
     internal static string SettingsFilePath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

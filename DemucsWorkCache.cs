@@ -108,27 +108,53 @@ internal static class DemucsWorkCache
             "\n",
             norm,
             len.ToString(CultureInfo.InvariantCulture),
-            ticks.ToString(CultureInfo.InvariantCulture));
+            ticks.ToString(CultureInfo.InvariantCulture),
+            DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
         File.WriteAllText(path, body, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        TouchDirectoryTimestamps(workDir, path);
     }
 
-    internal static void TouchWorkDir(string workDir)
+    /// <summary>キャッシュの最終利用日時を更新（保持期間の起算点）。</summary>
+    internal static void RecordCacheAccess(string workDir)
     {
+        if (string.IsNullOrEmpty(workDir) || !Directory.Exists(workDir))
+            return;
+
         try
         {
-            Directory.SetLastWriteTimeUtc(workDir, DateTime.UtcNow);
-            var meta = Path.Combine(workDir, SourceMetaFileName);
-            if (File.Exists(meta))
-                File.SetLastWriteTimeUtc(meta, DateTime.UtcNow);
+            var metaPath = Path.Combine(workDir, SourceMetaFileName);
+            if (File.Exists(metaPath))
+            {
+                var lines = File.ReadAllLines(metaPath);
+                var nowLine = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+                string[] updated;
+                if (lines.Length >= 4)
+                {
+                    updated = lines;
+                    updated[3] = nowLine;
+                }
+                else if (lines.Length == 3)
+                {
+                    updated = [lines[0], lines[1], lines[2], nowLine];
+                }
+                else
+                {
+                    updated = lines;
+                }
+
+                File.WriteAllLines(metaPath, updated, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            }
+
+            TouchDirectoryTimestamps(workDir, metaPath);
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Demucs キャッシュの Touch に失敗 ({workDir}): {ex}");
+            Debug.WriteLine($"Demucs キャッシュの RecordCacheAccess に失敗 ({workDir}): {ex}");
         }
     }
 
     /// <summary>
-    /// 最終更新から <paramref name="maxAge"/> を超えた demucs_* フォルダを削除する（起動時メンテ用）。
+    /// 最終利用から <paramref name="maxAge"/> を超えた demucs_* フォルダを削除する（起動時メンテ用）。
     /// </summary>
     internal static void DeleteExpiredWorkDirs(TimeSpan maxAge, Action<string>? log = null)
     {
@@ -141,8 +167,8 @@ internal static class DemucsWorkCache
         {
             try
             {
-                var last = Directory.GetLastWriteTimeUtc(dir);
-                if (last >= cutoff)
+                var lastUsed = TryGetLastUsedUtc(dir) ?? Directory.GetLastWriteTimeUtc(dir);
+                if (lastUsed >= cutoff)
                     continue;
 
                 Directory.Delete(dir, recursive: true);
@@ -153,6 +179,40 @@ internal static class DemucsWorkCache
                 Debug.WriteLine($"Demucs 期限切れフォルダの削除に失敗 ({dir}): {ex}");
                 log?.Invoke($"削除失敗: {dir} — {ex.Message}");
             }
+        }
+    }
+
+    private static DateTime? TryGetLastUsedUtc(string workDir)
+    {
+        var metaPath = Path.Combine(workDir, SourceMetaFileName);
+        if (!File.Exists(metaPath))
+            return null;
+
+        try
+        {
+            var lines = File.ReadAllLines(metaPath);
+            if (lines.Length < 4)
+                return null;
+
+            return DateTime.Parse(lines[3].Trim(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void TouchDirectoryTimestamps(string workDir, string metaPath)
+    {
+        try
+        {
+            Directory.SetLastWriteTimeUtc(workDir, DateTime.UtcNow);
+            if (File.Exists(metaPath))
+                File.SetLastWriteTimeUtc(metaPath, DateTime.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Demucs キャッシュのタイムスタンプ更新に失敗 ({workDir}): {ex}");
         }
     }
 

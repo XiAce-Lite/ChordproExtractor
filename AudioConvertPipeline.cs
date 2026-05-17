@@ -11,7 +11,8 @@ internal sealed record ConvertPipelineResult(
     string? BpmDisplayForTextBox,
     string StatusMessage,
     List<string> Warnings,
-    string? ChordproPaneErrorBody);
+    string? ChordproPaneErrorBody,
+    string? DemucsWorkDir = null);
 
 /// <summary>Demucs → Chordino / Bar / BPM までのオーケストレーション。</summary>
 internal static class AudioConvertPipeline
@@ -90,7 +91,7 @@ internal static class AudioConvertPipeline
             var reusedDemucsCache = demucsWorkDir != null;
             if (demucsWorkDir != null)
             {
-                DemucsWorkCache.TouchWorkDir(demucsWorkDir);
+                DemucsWorkCache.RecordCacheAccess(demucsWorkDir);
             }
             else
             {
@@ -201,7 +202,8 @@ internal static class AudioConvertPipeline
                 bpmDisplay,
                 status,
                 warnParts,
-                null);
+                null,
+                demucsWorkDir);
         }
         finally
         {

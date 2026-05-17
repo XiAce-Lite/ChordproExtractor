@@ -9,9 +9,54 @@
         MinWidth="960"
         Background="#F5F5F7"
         Loaded="Window_Loaded"
-        Closing="Window_Closing">
+        Closing="Window_Closing"
+        PreviewKeyDown="Window_PreviewKeyDown">
+    <Window.Resources>
+        <Style x:Key="PlaybackSourceSegmentStyle" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="#333" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="SegmentBorder"
+                                Background="#F0F0F4"
+                                BorderBrush="#C8C8D0"
+                                BorderThickness="1"
+                                Padding="14,6"
+                                MinWidth="68">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="SegmentBorder" Property="Background" Value="#1976D2" />
+                                <Setter TargetName="SegmentBorder" Property="BorderBrush" Value="#1565C0" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="SegmentBorder" Property="Background" Value="#E3EDF7" />
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsChecked" Value="True" />
+                                    <Condition Property="IsMouseOver" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="SegmentBorder" Property="Background" Value="#1565C0" />
+                            </MultiTrigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid Margin="16">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" MinHeight="260" />
@@ -117,8 +162,160 @@
             </Grid>
         </Border>
 
+        <!-- 再生バー -->
+        <Border Grid.Row="2"
+                Padding="12,10"
+                Background="White"
+                CornerRadius="8"
+                BorderBrush="#D0D0D8"
+                BorderThickness="1"
+                Margin="0,0,0,10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="False">
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Margin="0,0,16,0">
+                        <TextBlock Text="再生"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,10,0" />
+                        <Border Background="#E8E8EC"
+                                BorderBrush="#C8C8D0"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="2">
+                            <StackPanel Orientation="Horizontal">
+                                <RadioButton x:Name="SourceOriginalRadio"
+                                             Content="元曲"
+                                             GroupName="PlaybackSource"
+                                             Style="{StaticResource PlaybackSourceSegmentStyle}"
+                                             IsChecked="True"
+                                             Margin="0"
+                                             Checked="PlaybackSourceRadio_Checked" />
+                                <RadioButton x:Name="SourceVocalsRadio"
+                                             Content="ボイス"
+                                             GroupName="PlaybackSource"
+                                             Style="{StaticResource PlaybackSourceSegmentStyle}"
+                                             Margin="2,0,0,0"
+                                             IsEnabled="False"
+                                             Checked="PlaybackSourceRadio_Checked"
+                                             ToolTip="解析後、またはキャッシュがある場合に利用できます" />
+                                <RadioButton x:Name="SourceAccompanimentRadio"
+                                             Content="伴奏"
+                                             GroupName="PlaybackSource"
+                                             Style="{StaticResource PlaybackSourceSegmentStyle}"
+                                             Margin="2,0,0,0"
+                                             IsEnabled="False"
+                                             Checked="PlaybackSourceRadio_Checked"
+                                             ToolTip="解析後、またはキャッシュがある場合に利用できます" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="Rewind10Button"
+                                Content="◀ 10s"
+                                Padding="8,4"
+                                Margin="0,0,4,0"
+                                Click="Rewind10Button_Click"
+                                ToolTip="10 秒戻る（F3）" />
+                        <Button x:Name="PlayPauseButton"
+                                Content="▶"
+                                Padding="12,4"
+                                MinWidth="44"
+                                Margin="0,0,4,0"
+                                Click="PlayPauseButton_Click"
+                                ToolTip="再生 / 一時停止（Shift+Space、F5）" />
+                        <Button x:Name="StopPlaybackButton"
+                                Content="■"
+                                Padding="10,4"
+                                Margin="0,0,4,0"
+                                Click="StopPlaybackButton_Click" />
+                        <Button x:Name="Forward10Button"
+                                Content="10s ▶"
+                                Padding="8,4"
+                                Click="Forward10Button_Click"
+                                ToolTip="10 秒進む（F6）" />
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button x:Name="PointAButton"
+                                Content="A"
+                                Width="28"
+                                Margin="0,0,4,0"
+                                Click="PointAButton_Click"
+                                ToolTip="ループ開始位置を現在位置に設定" />
+                        <Button x:Name="PointBButton"
+                                Content="B"
+                                Width="28"
+                                Margin="0,0,4,0"
+                                Click="PointBButton_Click"
+                                ToolTip="ループ終了位置を現在位置に設定" />
+                        <ToggleButton x:Name="AbRepeatToggle"
+                                      Content="AB"
+                                      Padding="8,4"
+                                      Margin="0,0,12,0"
+                                      Click="AbRepeatToggle_Click"
+                                      ToolTip="A〜B の区間をリピート" />
+                        <TextBlock Text="速度"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,6,0"
+                                   Foreground="#555"
+                                   ToolTip="50%〜100%（遅くするのみ）" />
+                        <ComboBox x:Name="PlaybackSpeedCombo"
+                                  Width="76"
+                                  VerticalAlignment="Center"
+                                  Margin="0,0,12,0"
+                                  SelectionChanged="PlaybackSpeedCombo_SelectionChanged"
+                                  ToolTip="再生速度（50%〜100%）" />
+                        <TextBlock Text="音量"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,6,0"
+                                   Foreground="#555" />
+                        <Slider x:Name="VolumeSlider"
+                                Width="80"
+                                Minimum="0"
+                                Maximum="1"
+                                Value="0.8"
+                                VerticalAlignment="Center"
+                                ValueChanged="VolumeSlider_ValueChanged" />
+                    </StackPanel>
+                </DockPanel>
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="PlaybackCurrentTimeText"
+                               Grid.Column="0"
+                               Text="0:00"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0"
+                               Foreground="#555"
+                               FontFamily="Consolas,Cascadia Mono,monospace" />
+                    <Slider x:Name="SeekSlider"
+                            Grid.Column="1"
+                            Minimum="0"
+                            Maximum="1"
+                            Value="0"
+                            IsMoveToPointEnabled="True"
+                            PreviewMouseLeftButtonDown="SeekSlider_PreviewMouseLeftButtonDown"
+                            PreviewMouseLeftButtonUp="SeekSlider_PreviewMouseLeftButtonUp"
+                            ValueChanged="SeekSlider_ValueChanged" />
+                    <TextBlock x:Name="PlaybackTotalTimeText"
+                               Grid.Column="2"
+                               Text="0:00"
+                               VerticalAlignment="Center"
+                               Margin="8,0,0,0"
+                               Foreground="#555"
+                               FontFamily="Consolas,Cascadia Mono,monospace" />
+                </Grid>
+            </Grid>
+        </Border>
+
         <!-- 歌詞 | コードパレット | Chordpro プレビュー -->
-        <Grid x:Name="MainEditorGrid" Grid.Row="2" Margin="0,0,0,10">
+        <Grid x:Name="MainEditorGrid" Grid.Row="3" Margin="0,0,0,10">
             <!-- 3 列とも * 幅にし、各スプリッターが「左右の列だけ」をリサイズ（Auto 列は星列と干渉して狭まる） -->
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="ColLyrics" Width="2*" MinWidth="200" />
@@ -135,10 +332,20 @@
                     BorderBrush="#D0D0D8"
                     BorderThickness="1">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top"
-                               Text="歌詞（編集・コード挿入先）"
-                               FontWeight="SemiBold"
-                               Margin="0,0,0,6" />
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,6">
+                        <TextBlock Text="歌詞（編集・コード挿入先）"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                        <TextBlock x:Name="CurrentChordTextBlock"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold"
+                                   Foreground="#1565C0"
+                                   FontFamily="Consolas,Cascadia Mono,monospace"
+                                   FontSize="12"
+                                   Text="現在: —"
+                                   ToolTip="再生位置のコード（F4 で歌詞のキャレットへ挿入）" />
+                    </Grid>
                     <TextBox x:Name="LyricsTextBox"
                              AcceptsReturn="True"
                              TextWrapping="Wrap"
@@ -149,7 +356,7 @@
                              BorderBrush="#C8C8D0"
                              BorderThickness="1"
                              Background="#FFFFFA"
-                             ToolTip="ネットなどからコピーした歌詞を貼り付け、カーソル位置に右パレットのコードをクリックで挿入します。" />
+                             ToolTip="矢印で位置を移動。F4 で現在のコードを挿入。Shift+Space / F5 で再生・一時停止。F3/F6 で ±10 秒。" />
                 </DockPanel>
             </Border>
 
@@ -180,7 +387,7 @@
                                Foreground="#666"
                                FontSize="11"
                                TextWrapping="Wrap"
-                               Text="挿入は歌詞のキャレット位置に行われます。プレビュー欄は手編集できます。歌詞とプレビューを揃えるときは「Chordpro プレビュー更新」を押してください。" />
+                               Text="クリックまたは F4 で歌詞へ挿入。Shift+Space / F5 再生、F3/F6 で ±10 秒。" />
                     <ListBox x:Name="ChordPaletteList"
                              BorderThickness="0"
                              Background="Transparent"
@@ -194,6 +401,13 @@
                                     <Setter Property="Padding" Value="0" />
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                     <Setter Property="Margin" Value="0,0,0,2" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                            <Setter Property="Background" Value="#D6E8F5" />
+                                            <Setter Property="BorderBrush" Value="#1976D2" />
+                                            <Setter Property="BorderThickness" Value="4,0,0,0" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
                                 </Style>
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
@@ -203,6 +417,15 @@
                                             Margin="0,0,0,4"
                                             HorizontalContentAlignment="Stretch"
                                             ToolTip="{Binding ToolTipText}">
+                                        <Button.Style>
+                                            <Style TargetType="Button">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
@@ -211,7 +434,17 @@
                                             <TextBlock Grid.Column="0"
                                                        Text="{Binding Label}"
                                                        TextTrimming="CharacterEllipsis"
-                                                       VerticalAlignment="Center" />
+                                                       VerticalAlignment="Center">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                                <Setter Property="Foreground" Value="#0D47A1" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
                                             <TextBlock Grid.Column="1"
                                                        Text="{Binding CheckGlyph}"
                                                        MinWidth="22"
@@ -265,7 +498,7 @@
         </Grid>
 
         <!-- 下部: 進捗・保存 -->
-        <Border Grid.Row="3"
+        <Border Grid.Row="4"
                 Padding="12"
                 Background="White"
                 CornerRadius="8"

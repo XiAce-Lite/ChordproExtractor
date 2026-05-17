@@ -68,7 +68,7 @@ internal static class ChordPaletteRowsFactory
                 ? $"{FormatChordPaletteTime(tSec)}  {insert}"
                 : $"Bar {barIdx + 1}: {insert}";
             var tip = barIdx < 0 ? $"{tSec:0.###} s" : $"Bar {barIdx + 1}（{tSec:0.###} s）";
-            collection.Add(new ChordPaletteItemVm(label, insert, tip));
+            collection.Add(new ChordPaletteItemVm(label, insert, tip, tSec));
         }
 
         return collection;
